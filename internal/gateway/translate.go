@@ -62,6 +62,14 @@ func translatePlanOf(ctx context.Context) *plugin.TranslatePlan {
 	return plan
 }
 
+// withoutTranslatePlan takes the plan off a context: a request magpie makes
+// of itself is not translated (the search, the vision stand-in, the advisor,
+// the router, the translation itself, the titles, the compaction). The plan
+// rides on the agent's request's context, and those calls are made with it.
+func withoutTranslatePlan(ctx context.Context) context.Context {
+	return context.WithValue(ctx, translateKey{}, (*plugin.TranslatePlan)(nil))
+}
+
 // translateRequestText translates the texts of a request's messages that are
 // in another language than the one wanted. The system prompt, the tools, the
 // tool calls, the tool results and the reasoning are left as they are: a

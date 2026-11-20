@@ -13,6 +13,7 @@ hooks](gateway-request-hooks.md).
 | --- | --- | --- |
 | The plan | The model to translate with, the two languages, the scripts and the prompt | `plugin.TranslatePlan` in [`internal/plugin/gateway.go`](../../internal/plugin/gateway.go); the hook `onTranslate` in [`internal/plugin/host.js`](../../internal/plugin/host.js) |
 | The request's texts | Which texts are translated, and the call that translates them | [`internal/gateway/translate.go`](../../internal/gateway/translate.go) |
+| Magpie's own calls | Which calls are not translated, and how the plan is taken off their context | `withoutTranslatePlan` in [`internal/gateway/translate.go`](../../internal/gateway/translate.go); the markers it is called at: `ownAsk` in [`internal/gateway/middleware.go`](../../internal/gateway/middleware.go), `askChatCtx` in [`internal/gateway/classify.go`](../../internal/gateway/classify.go), the title calls in [`internal/gateway/codex_titles.go`](../../internal/gateway/codex_titles.go), and the compaction's summary and the fallback in [`internal/gateway/codex_backend.go`](../../internal/gateway/codex_backend.go) |
 | The reply's texts | The encoder that holds the reply's text, and the whole reply's translation | [`internal/gateway/translate_reply.go`](../../internal/gateway/translate_reply.go) |
 | The wait | How long a translation is given to answer | `TranslateTimeout` and the `TranslateWait` that reads it in [`internal/settings/settings.go`](../../internal/settings/settings.go) |
 | The ledger | The kind a translation's row carries | `usage.KindTranslate` in [`internal/usage/purpose.go`](../../internal/usage/purpose.go) |
@@ -54,7 +55,10 @@ hooks](gateway-request-hooks.md).
   are not translated.
 - A request that goes to Codex's own sign-in (the native path
   `/backend-api/codex`) is not translated: that path sends the request as it
-  came and never builds the IR.
+  came and never builds the IR. Neither is Codex's own turn served on
+  magpie's accounts when its sign-in is too busy (the fallback), nor the
+  summary magpie asks of a model for a compaction: the IR drops the sealed
+  reasoning and the compaction items Codex needs.
 - A text that is already in the language wanted is left as it is, told by
   the script the plan named.
 - Both ends of a translation are kept, so a text a translation produced
@@ -63,9 +67,14 @@ hooks](gateway-request-hooks.md).
 - A failure leaves the request as it was: no plan, a model that is not
   served, a model that fails or is late, or an answer whose count is not the
   count asked for. Half a translation is worse than none.
-- The translation's own call is not translated: it is made with the request's
-  own context, and the plan rides on that context, so a request whose agent
-  is the translation's is told apart and left alone (`magpiesOwnTranslation`).
+- A request magpie makes of itself is not translated: the plan rides on the
+  agent's request's context, and it is taken off the context of every call
+  magpie makes of itself — the search, the vision stand-in, the advisor, the
+  router, the translation itself, the Codex titles, the Codex predictions
+  and the compaction's summary — so those calls go as they came. The
+  User-Agent of magpie's own translations is no longer a gate: a client that
+  sends it is translated all the same, and the ledger tells a translation's
+  row from the turn's own by it.
 - The wait is `TranslateTimeout`, 30 seconds by default and at most 300.
 
 ## Verification

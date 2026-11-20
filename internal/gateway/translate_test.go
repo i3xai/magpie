@@ -671,3 +671,143 @@ func TestTranslationHasItsOwnRowInTheLedger(t *testing.T) {
 		}
 	}
 }
+
+// A request magpie makes of itself is not translated: the plan rides on the
+// agent's request's context, and ownAsk is the marker that says this call is
+// magpie's own (the search, the vision stand-in, the advisor). The provider
+// is asked as it came, and no translation is made.
+func TestMagpiesOwnCallIsNotTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a26", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a27", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	s := New()
+	r := httptest.NewRequest("POST", "http://magpie/v1/chat/completions", nil)
+	r = r.WithContext(ownAsk(withTranslatePlan(r.Context(), aPlan("a26/m"))))
+	rec := httptest.NewRecorder()
+	s.serve(rec, r, provider.Chat, []byte(`{"model":"a27/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	if m.calls() != 0 {
+		t.Fatalf("a translation was made: %d", m.calls())
+	}
+	if !strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the request was translated: %s", asked)
+	}
+}
+
+// The translation's own call is not translated: the model that translates is
+// asked with the text as it is, and the reply it gets is translated back. A
+// translation of the translation would ask the model again, and again.
+//
+// The model is asked twice: the request's texts, and the reply's text. The
+// second ask carries the client's reply, not the translation's own reply.
+//
+// The texts the translation's own call carries are put in the cache first, so
+// that a call which asked itself again stops there instead of asking for
+// ever: the test then sees the call that asked again, and not a hang.
+func TestTheTranslationIsNotTranslatedItself(t *testing.T) {
+	fresh(t)
+	plan := aPlan("a26/m")
+	carry, _ := json.Marshal([]string{"帮我写个函数"})
+	translateCache.pair(plan).remember(string(carry), "translated")
+	m := &translateModel{}
+	serveOn(t, "a26", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a27", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"done"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a27/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), plan))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if m.calls() != 2 {
+		t.Fatalf("the translator's model was asked %d times: %q", m.calls(), m.asked)
+	}
+	// the first ask is the request's texts, as they came
+	if len(m.asked[0]) != 1 || m.asked[0][0] != "帮我写个函数" {
+		t.Fatalf("the translator's model was asked: %q", m.asked[0])
+	}
+	// the second is the client's reply, not the translation's own reply
+	if len(m.asked[1]) != 1 || m.asked[1][0] != "done" {
+		t.Fatalf("the translator's model was asked: %q", m.asked[1])
+	}
+	// the provider was asked in the language the model wanted
+	if !strings.Contains(asked, "translated") || strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the provider was asked: %s", asked)
+	}
+	// and the client got its own language back
+	if !strings.Contains(rec.Body.String(), "翻译") {
+		t.Fatalf("the client was told: %s", rec.Body.String())
+	}
+}
+
+// The User-Agent of magpie's own translations does not opt a client out of
+// the translation: a client that sends it is translated all the same.
+func TestTheTranslatesUserAgentDoesNotOptTheClientOut(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a28", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a29", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"done"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a29/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req.Header.Set("User-Agent", TranslateAgent)
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a28/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if m.calls() != 2 {
+		t.Fatalf("the translator's model was asked %d times: %q", m.calls(), m.asked)
+	}
+	if !strings.Contains(asked, "translated") || strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the provider was asked: %s", asked)
+	}
+}
+
+// A Codex title is magpie's own call: the title model is asked with the
+// conversation's text as it came, and no translation is made.
+func TestTheCodexTitleIsNotTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a30", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a31", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(
+			`data: {"id":"c1","choices":[{"index":0,"delta":{"content":"Fix login bug"}}]}`,
+			`data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	body := `{"model":"a31/m","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"Generate a concise title. User prompt:\n帮我修复登录错误"}]}],` +
+		`"text":{"format":{"type":"json_schema","name":"codex_output_schema","strict":true,"schema":{"type":"object","properties":{"title":{"type":"string","minLength":1,"maxLength":36}},"required":["title"],"additionalProperties":false}}}}`
+	r := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(body))
+	r = r.WithContext(withTranslatePlan(r.Context(), aPlan("a30/m")))
+	rec := httptest.NewRecorder()
+	s.codexTitle(rec, r, []byte(body), "a31/m")
+	if m.calls() != 0 {
+		t.Fatalf("a translation was made: %d", m.calls())
+	}
+	if !strings.Contains(asked, "帮我修复登录错误") {
+		t.Fatalf("the title was translated: %s", asked)
+	}
+}

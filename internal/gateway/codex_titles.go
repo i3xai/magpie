@@ -309,7 +309,7 @@ func (s *Server) codexTitle(w http.ResponseWriter, r *http.Request, body []byte,
 		}
 		return ""
 	}
-	ctx := context.WithValue(r.Context(), titleCheckKey{}, check)
+	ctx := withoutTranslatePlan(context.WithValue(r.Context(), titleCheckKey{}, check))
 	ctx = context.WithValue(ctx, titleShapeKey{}, &shape)
 	if to == settings.Shared().CodexTitles {
 		// the model picked for titles in magpie's settings, not by the
@@ -388,7 +388,7 @@ func (s *Server) codexShaped(w http.ResponseWriter, r *http.Request, body []byte
 		}
 		return ""
 	}
-	ctx := context.WithValue(r.Context(), titleCheckKey{}, check)
+	ctx := withoutTranslatePlan(context.WithValue(r.Context(), titleCheckKey{}, check))
 	if chose {
 		ctx = magpieChose(ctx)
 	}
@@ -441,7 +441,7 @@ func (s *Server) codexPrediction(w http.ResponseWriter, r *http.Request, body []
 		}
 		return ""
 	}
-	ctx := context.WithValue(r.Context(), titleCheckKey{}, check)
+	ctx := withoutTranslatePlan(context.WithValue(r.Context(), titleCheckKey{}, check))
 	if to == settings.Shared().CodexPredictions {
 		ctx = magpieChose(ctx)
 	}

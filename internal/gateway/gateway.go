@@ -9601,21 +9601,10 @@ func parseTranslated(from, to provider.Protocol, body []byte, advised bool) (*Re
 }
 
 // requestTranslator is the translator of a request's texts, or nil when the
-// request is not translated: no plan, or the translation magpie makes of
-// itself, which is the translation and not a request to translate
-// (translate.go).
+// request is not translated: no plan. A request magpie makes of itself
+// carries no plan either (translate.go).
 func (s *Server) requestTranslator(r *http.Request) *translator {
-	if magpiesOwnTranslation(r) {
-		return nil
-	}
 	return s.translatorFor(r)
-}
-
-// magpiesOwnTranslation tells whether the request is the translation magpie
-// makes of itself: the call the plan's model is asked for the texts with
-// (translate.go). It is not translated: it is the translation.
-func magpiesOwnTranslation(r *http.Request) bool {
-	return r != nil && r.Header.Get("User-Agent") == TranslateAgent
 }
 
 // translate serves a client API the provider lacks by speaking another

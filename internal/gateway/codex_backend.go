@@ -1824,9 +1824,16 @@ func (s *Server) codexReviewLead(r *http.Request, p provider.Provider, model str
 // magpie's accounts; the account itself is not asked again (handedOnOf).
 // kept is what Codex was sent while it waited: the stream's headers, once
 // it had them, which the fallback's reply follows.
+//
+// The turn is Codex's own and not magpie's own call, but it is not
+// translated either: the IR drops the sealed reasoning and the compaction
+// items Codex needs, and the rule that keeps the native path whole is the
+// same one. The plan the agent's request carries is taken off it
+// (translate.go).
 func (s *Server) codexFallBack(w http.ResponseWriter, r *http.Request, body []byte, kept *keptAlive) {
 	id := "codex/" + modelOf(body)
 	body, _ = codexInputAs(withModel(body, id), true, s.nativeCompactionFor(id))
+	r = r.WithContext(withoutTranslatePlan(r.Context()))
 	s.serve(w, r.WithContext(context.WithValue(r.Context(), handedOnKey{}, kept)), provider.Responses, body)
 }
 
@@ -3885,6 +3892,10 @@ func (s *Server) codexCompact(w http.ResponseWriter, r *http.Request, body []byt
 	r = r.WithContext(budget)
 	r = askWhole(r)
 	r = askCompaction(r)
+	// the summary is magpie's own ask of a model: the plan the agent's
+	// request carries is taken off it, so the summary is not translated
+	// (translate.go)
+	r = r.WithContext(withoutTranslatePlan(r.Context()))
 	ask := func(r *http.Request, b []byte) (*recorder, compactResult, error) {
 		rec := &recorder{header: http.Header{}, status: 200}
 		s.serve(rec, r, provider.Responses, b)

@@ -617,3 +617,51 @@ export async function onResponse(body,ctx){await fetch(ctx.options.url,{method:"
 		}
 	}
 }
+
+// The plan a plugin's onTranslate gives reaches the request: the provider is
+// asked in the language the plan named, and not in the client's own.
+func TestThePluginPlanReachesTheRequest(t *testing.T) {
+	t.Setenv("MAGPIE_BUN", testenv.Bun(t))
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	t.Cleanup(plugin.Settle)
+	// the model that translates, and the model the request goes to
+	m := &translateModel{}
+	serveOn(t, "a32", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a33", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c1","choices":[{"index":0,"delta":{"content":"done"}}]}`,
+			`data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	abs := filepath.Join(t.TempDir(), "translate.hooks.js")
+	script := `export async function onTranslate(ctx){return {model:"a32/m",from:"zh",to:"en",fromName:"Chinese",toName:"English",fromScript:"cjk",toScript:"latin",system:"Translate {from} into {to}."}}`
+	if err := os.WriteFile(abs, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := plugin.Add(t.Context(), abs); err != nil {
+		t.Fatal(err)
+	}
+	if err := plugin.SetOptions(abs, map[string]any{"gatewayTimeoutMs": 5000}); err != nil {
+		t.Fatal(err)
+	}
+	gw := httptest.NewServer(lanGuard(New().Handler()))
+	defer gw.Close()
+	req, _ := http.NewRequestWithContext(t.Context(), "POST", gw.URL+"/v1/chat/completions", strings.NewReader(`{"model":"a33/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req.Header.Set("Authorization", "Bearer magpie")
+	res, err := gw.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	reply, _ := io.ReadAll(res.Body)
+	if res.StatusCode != 200 {
+		t.Fatalf("%d %s", res.StatusCode, reply)
+	}
+	if !strings.Contains(asked, "translated") || strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the provider was asked: %s", asked)
+	}
+}

@@ -144,8 +144,12 @@ func accountSkipped(ctx context.Context, p provider.Provider, model string) (by 
 // ctx.protocol names, and ctx.model and ctx.stream are the agent's. Nor
 // is it the agent's turn, which a model set for requests masking would
 // change takes (maskRouteFor): it is masked as magpie's own asks are.
+//
+// The plan the agent's request carries is taken off it: the ask is magpie's
+// own, and it is not translated (translate.go).
 func ownAsk(ctx context.Context) context.Context {
-	return context.WithValue(context.WithValue(ctx, triedKey{}, mwRuns{}), agentTurnKey{}, false)
+	ctx = context.WithValue(context.WithValue(ctx, triedKey{}, mwRuns{}), agentTurnKey{}, false)
+	return withoutTranslatePlan(ctx)
 }
 
 // middlewareWanted: plugins.json has a JS middleware on, so plugins/middleware

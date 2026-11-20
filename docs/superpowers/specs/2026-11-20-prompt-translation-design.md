@@ -239,7 +239,7 @@ Every failure leaves the request as it was:
 | The answer's count does not match | Every text of that call is left untranslated. |
 | The plugin's hook throws or is late | That plugin gives no plan. Another plugin's plan is asked, and the request is translated if one gives a usable plan. |
 | The client asked for structured output | Nothing is translated. Its answer is JSON, and a translation of it is neither valid JSON nor the JSON the client asked for. |
-| The request is a native compaction or a sealed subagent's task | It is relayed as it came, and its texts are not translated: a translation would leave those out. |
+| The request is a native compaction or a sealed subagent's task | It keeps its relay when it could be relayed, and its texts are not translated: a translation would leave those out. |
 
 The failure is counted in the usage rows and logged, at the rate the gateway
 logs its other failures.
@@ -248,12 +248,17 @@ logs its other failures.
 
 - It does not translate the system prompt, the tools, the tool results or the
   reasoning.
-- It does not translate a request magpie makes of itself: the titles, the
-  classifier, the search and the vision stand-ins go through `serve` and are
-  not agent requests.
+- It does not translate a request magpie makes of itself: the plan rides on
+  the agent's request's context, and it is taken off the context of every
+  call magpie makes of itself — the search, the vision stand-in, the
+  advisor, the router, the translation itself, the Codex titles, the Codex
+  predictions and the compaction's summary — so those calls go as they came.
 - It does not translate a request that goes to Codex's own sign-in (the
   native path `/backend-api/codex`): that path sends the request as it came
-  and never builds the IR.
+  and never builds the IR. Neither is Codex's own turn served on magpie's
+  accounts when its sign-in is too busy (the fallback), nor the summary
+  magpie asks of a model for a compaction: the IR drops the sealed
+  reasoning and the compaction items Codex needs.
 - It does not translate the images, the files or the audio.
 - It does not change what B is asked, beyond the text it is given.
 

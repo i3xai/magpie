@@ -641,7 +641,12 @@ func (s *Server) askChat(wait time.Duration, held access.Identity, model string,
 // description's is (sideTimedOut, #2318): the usage log said "the agent
 // canceled the request", a 499 no failure, though no agent had
 // (ESern29751 on X).
+//
+// The call is magpie's own: the plan the agent's request carries is taken
+// off it, so the router's call and the translation's own call are not
+// translated (translate.go).
 func (s *Server) askChatCtx(ctx context.Context, wait time.Duration, held access.Identity, model, agent string, body []byte) (string, error) {
+	ctx = withoutTranslatePlan(ctx)
 	// what the call is called in the usage log's cause: the router's own
 	// call is a decision model's, a translation's a translation's.
 	what := "translation"
