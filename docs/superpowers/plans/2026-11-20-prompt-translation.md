@@ -1914,6 +1914,180 @@ without the change: the client is told the English text."
 
 ---
 
+### Task 5 — fix round 1: the search and the advisor render the reply too
+
+**Files:**
+- Modify: `internal/gateway/claude_subscription.go` (`relay` and `relayFailing` take a translator)
+- Modify: `internal/gateway/search.go` (`searchReply` passes the request's translator)
+- Test: `internal/gateway/translate_test.go`
+
+**Why this round:** the review of Task 5 found a fourth renderer the design's
+table does not name. The request's texts are translated on the way in
+(`gateway.go`: `translate`), but a request that carries a web search or an
+advisor is answered by `searchReply`, which calls `relay` in
+`claude_subscription.go`: that function builds its encoder with a `nil`
+translator and renders a whole reply with `renderUsage`, which knows nothing of
+a translator. So the Chinese prompt goes to the model in English and the
+English answer comes back in English — the feature silently does nothing for
+every request that carries a search.
+
+The fix is the one `relayStatus` already has: the renderer takes a translator,
+and the caller that serves the agent's turn passes the request's own.
+
+| The renderer | The translator |
+| --- | --- |
+| `relay` in `claude_subscription.go` | the request's own, when the search answers the client |
+| `relay` in `claude_subscription.go` | none, for the Claude bridge: that is a turn magpie runs itself |
+| `relayStatus` in `relay_status.go` | already takes one |
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `internal/gateway/translate_test.go`. This round takes a33 to a36.
+
+```go
+// A reply that came through magpie's own search reaches the client in the
+// language asked: the search's answer is rendered by the search's renderer,
+// which is not the one the design's table names.
+func TestTheSearchsReplyIsTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a33", "ka", []string{"m"}, m)
+	...
+}
+```
+
+The test drives `searchReply` the way the reviewer did: a request with a plan
+on its context, a searcher that answers, and the bytes the client got. The
+reviewer's probe is the shape to copy — it called `s.searchReply` with a plan
+on the request and read the client's bytes:
+
+```
+stream=false code=200 the client was told: {"choices":[…{"message":{"content":"done",…}}]}
+stream=true  code=200 the client was told: data: {…"delta":{"content":"done"}…}
+the translation model was asked 0 times
+```
+
+The whole reply and the streamed one are both asserted: the renderer has two
+paths (`encoder` for the stream, `renderUsage` for the whole reply), and each
+needs its own proof.
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `go test -tags nogui ./internal/gateway -run 'TestTheSearchsReplyIsTranslated' -count=1`
+
+Expected: FAIL — the client is told the English text.
+
+- [ ] **Step 3: Give the renderer a translator**
+
+In `internal/gateway/claude_subscription.go`:
+
+```go
+func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name string, req *Request, events <-chan Event, usage *Usage,
+	abort, begin func(), ended func(said, stop string, ok bool), tr *translator) (int, string) {
+	return relayFailing(w, r, from, name, req, events, usage, func(int, string) { abort() }, begin, ended, tr)
+}
+```
+
+and in `relayFailing`, the stream's encoder takes it:
+
+```go
+		enc := encoder(from, sw, req, tr, usage)
+```
+
+and the whole reply is translated before it is rendered, as `translate` in
+`gateway.go` does:
+
+```go
+	res := col.finish()
+	usage.add(res.Usage)
+	usage.add(Usage{Served: res.Model})
+	// the reply's texts are translated before it is rendered, so a client
+	// that asked for no stream is given the same language a streaming client
+	// is (translate_reply.go)
+	if tr != nil && !req.wantsJSON() {
+		tr.translateResult(r.Context(), &res)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, _ = w.Write(renderUsage(from, res, req, usage))
+```
+
+In `internal/gateway/search.go`, `searchReply` passes the request's own
+translator:
+
+```go
+	return relay(w, r, from, name, req, events, usage, cancel, nil, func(string, string, bool) {}, s.requestTranslator(r))
+```
+
+And the Claude bridge, which is the same function called for a turn magpie runs
+itself, passes none:
+
+```go
+	code, msg := relayFailing(w, r, from, name, req, events, usage, abort, begin, func(said, stop string, ok bool) {
+		...
+	}, nil)
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `go test -tags nogui ./internal/gateway -run 'TestTheSearchsReplyIsTranslated|TestTranslat|TestStructur' -count=1`
+
+Expected: PASS.
+
+- [ ] **Step 5: The reply's text of a text-only reply, and the guard**
+
+The review found two things the round owes the next one:
+
+- A text-only reply's text now arrives as one piece at the reply's end (the
+  release happens on the next non-text event, which for a text-only reply is
+  the reply's stop). That is the design's hold, and it is now tested.
+- The `requestTranslator` guard on the reply side holds nothing: breaking it
+  back to `translatorFor` left the whole suite green. The test that holds it
+  is the one Task 4's fix round writes (the translation's own call is not
+  translated), and this round's test must not undo it.
+
+- [ ] **Step 6: Correct the report's keepalive claim**
+
+The report says the client gets no keepalive during the translation. It does:
+the keepalive has a lock of its own, and the client is kept alive while the
+text is held. What stalls is the reply's text, not the connection. The report
+is a workspace file, so the correction goes there; if the commit body says the
+same, the commit body is corrected too.
+
+- [ ] **Step 7: Correct the design's table of renderers**
+
+The design's table names the three renderers that answer the client. It missed
+the fourth, and the round that drew the boundary was the plan, not the
+implementer. The table names `relay` in `claude_subscription.go` now, and says
+which of its two calls a translator and which none (the Claude bridge answers a
+turn magpie runs itself).
+
+The reference in `docs/subsystems/gateway-translation.md` says the same.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add internal/gateway/claude_subscription.go internal/gateway/search.go internal/gateway/translate_test.go docs/superpowers/specs/2026-11-20-prompt-translation-design.md docs/subsystems/gateway-translation.md
+git commit -m "gateway: a search's reply reaches the client in the language asked
+
+The search and the advisor answer the client through a renderer the design's
+table does not name: the encoder was built with no translator and the whole
+reply was rendered by a function that knows none. A request that carried a
+web search or an advisor was therefore translated on the way in and not on
+the way out: the Chinese prompt went to the model in English and the English
+answer came back in English.
+
+The renderer takes a translator, as the one that answers a backend's own
+statuses already did. The Claude bridge, which is the same function, answers
+a turn magpie runs itself and keeps none.
+
+Verified: go test -tags nogui ./internal/gateway -run
+'TestTheSearchsReplyIsTranslated'. The test fails without the change: the
+client is told the English text."
+```
+
+---
+
 ### Task 6: The translation is told apart in the ledger
 
 **Files:**
