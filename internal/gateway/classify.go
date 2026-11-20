@@ -622,8 +622,18 @@ func readEffort(answer string) (string, float64, error) {
 	return jevLevels[n-1].effort, float64(n - 1), nil
 }
 
-// askChat sends a chat model body through the gateway and returns its
-// answer's text, if it comes in wait.
+// askChat asks a decision provider's model through its own API, and
+// any other model through the gateway itself, as a client would: which of
+// intents the message is and, when effort, how hard the turn is, each in a
+// call of its own, at once.
+func (s *Server) askChat(wait time.Duration, held access.Identity, model string, body []byte) (string, error) {
+	return s.askChatCtx(context.Background(), wait, held, model, RouterAgent, body)
+}
+
+// askChatCtx is askChat with the caller's context and the agent the call is
+// told apart by: the router's own calls and a translation's are two kinds of
+// a row in the ledger.
+//
 // held, when it names accounts, holds it to them, as heldByGroup does a
 // request through a group.
 //
@@ -631,25 +641,25 @@ func readEffort(answer string) (string, float64, error) {
 // description's is (sideTimedOut, #2318): the usage log said "the agent
 // canceled the request", a 499 no failure, though no agent had
 // (ESern29751 on X).
-func (s *Server) askChat(wait time.Duration, held access.Identity, model string, body []byte) (string, error) {
-	ctx, cancel := context.WithTimeoutCause(context.Background(), wait, sideTimedOut{"decision model", wait})
+func (s *Server) askChatCtx(ctx context.Context, wait time.Duration, held access.Identity, model, agent string, body []byte) (string, error) {
+	ctx, cancel := context.WithTimeoutCause(ctx, wait, sideTimedOut{"decision model", wait})
 	defer cancel()
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://magpie/v1/chat/completions", nil)
 	if err != nil {
 		return "", err
 	}
 	r.Header.Set("Content-Type", "application/json")
-	r.Header.Set("User-Agent", RouterAgent)
+	r.Header.Set("User-Agent", agent)
 	if len(held.Accounts) > 0 {
 		r = r.WithContext(access.WithIdentity(r.Context(), held))
 	}
 	w := httptest.NewRecorder()
 	s.serve(w, r, provider.Chat, body)
 	if ctx.Err() != nil {
-		if full := classifyTimeout(); wait < full {
-			return "", cutShort(model, wait, full)
+		if agent == RouterAgent && wait < classifyTimeout() {
+			return "", cutShort(model, wait, classifyTimeout())
 		}
-		return "", fmt.Errorf("%s gave no answer in %s", model, wait)
+		return "", fmt.Errorf("%s gave no answer in %s", agent, wait)
 	}
 	var out struct {
 		Choices []struct {
