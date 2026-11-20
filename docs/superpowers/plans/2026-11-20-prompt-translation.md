@@ -565,6 +565,28 @@ func TestTranslatorKeepsTheTextsWhenTheModelFails(t *testing.T) {
 		t.Fatalf("translated: %q", out)
 	}
 }
+
+// The cache lives for the gateway's life and every request reaches it, so
+// two translations at once may not write over each other. Run this under
+// -race.
+func TestTranslatorKeepsTheCacheWholeWhenTwoTranslateAtOnce(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a6", "ka", []string{"m"}, m)
+	s := New()
+	tr := aTranslator(t, s, aPlan("a6/m"))
+	var wg sync.WaitGroup
+	for i := range 4 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := range 10 {
+				tr.translate(context.Background(), []string{fmt.Sprintf("你好%d-%d", i, j)}, true)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -826,6 +848,7 @@ type translations struct {
 }
 
 type translationPair struct {
+	mu       sync.Mutex
 	from, to string
 	model    string
 	system   string
@@ -860,6 +883,8 @@ func (t *translations) pair(plan *plugin.TranslatePlan) *translationPair {
 // lookup is the text on the side wanted, for a text of the pair, and whether
 // the pair knows it.
 func (p *translationPair) lookup(text string, wantTo bool) (string, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	e, ok := p.entries[translateHash(text)]
 	if !ok {
 		return "", false
@@ -873,6 +898,8 @@ func (p *translationPair) lookup(text string, wantTo bool) (string, bool) {
 // remember keeps both ends of a translation: the text it was given and the
 // text it produced, each on the side of the pair it is on.
 func (p *translationPair) remember(from, to string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.put(from, translationEntry{text: to, to: false})
 	p.put(to, translationEntry{text: from, to: true})
 }
