@@ -1070,6 +1070,7 @@ test fails without the change: there is no translator to ask."
 - Modify: `internal/gateway/gateway.go` (`translate`: translate the request's texts)
 - Modify: `internal/gateway/middleware.go` (`gatewayHooks` keeps the plan; `serveAgent` follows the new signature)
 - Modify: `internal/gateway/codex_backend.go` (the other caller follows the new signature)
+- Modify: `internal/gateway/gateway_hook_test.go` (the two callers of `gatewayHooks` follow the new signature)
 - Test: `internal/gateway/translate_test.go`
 
 **Interfaces:**
@@ -1080,23 +1081,27 @@ test fails without the change: there is no translator to ask."
 
 Add to `internal/gateway/translate_test.go`, and add `"github.com/yetone/magpie/internal/provider"` to its imports:
 
+Each test names a provider of its own, so the translations one test made are
+not another's: the translator's own tests already take a1 to a10, and the
+gateway's other tests take b and c.
+
 ```go
-// A request's Chinese prompt reaches the provider in English, and the
-// provider's reply reaches the client in Chinese.
+// A request's Chinese prompt reaches the provider in English. The reply's
+// own side is Task 5's, and is not asserted here.
 func TestTranslationThroughTheGateway(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a6", "ka", []string{"m"}, m)
+	serveOn(t, "a11", "ka", []string{"m"}, m)
 	var asked string
-	serveOn(t, "b", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serveOn(t, "a12", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		asked = string(body)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
 	}))
 	s := New()
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"b/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
-	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a6/m")))
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a12/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a11/m")))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -1108,9 +1113,6 @@ func TestTranslationThroughTheGateway(t *testing.T) {
 	if strings.Contains(asked, "帮我写个函数") {
 		t.Fatalf("the provider was asked in Chinese: %s", asked)
 	}
-	if !strings.Contains(rec.Body.String(), "翻译") {
-		t.Fatalf("the client was told: %s", rec.Body.String())
-	}
 }
 
 // A request magpie makes of itself is not translated: it goes through serve
@@ -1118,12 +1120,12 @@ func TestTranslationThroughTheGateway(t *testing.T) {
 func TestMagpiesOwnRequestIsNotTranslated(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a7", "ka", []string{"m"}, m)
+	serveOn(t, "a15", "ka", []string{"m"}, m)
 	s := New()
 	r := httptest.NewRequest("POST", "http://magpie/v1/chat/completions", nil)
 	r.Header.Set("User-Agent", RouterAgent)
 	rec := httptest.NewRecorder()
-	s.serve(rec, r, provider.Chat, []byte(`{"model":"a7/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	s.serve(rec, r, provider.Chat, []byte(`{"model":"a15/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
 	if m.calls() != 0 {
 		t.Fatalf("a translation was made: %d", m.calls())
 	}
@@ -1170,6 +1172,19 @@ and in `internal/gateway/codex_backend.go`:
 		w, r, body, hooked = gatewayHooks(w, r, provider.Responses, body)
 ```
 
+and in `internal/gateway/gateway_hook_test.go`, the two places that call
+`gatewayHooks` themselves, which follow the new signature as well: the first
+keeps the request it is given (the plan is on it), the second throws it away
+(it does not read the request after the call):
+
+```go
+				w, r, b, done := gatewayHooks(w, r, provider.Chat, []byte(`{"model":"fake/m1","origin":"local","messages":[{"role":"user","content":"hello"}]}`))
+```
+
+```go
+		_, _, b, done := gatewayHooks(w, req, provider.Chat, []byte(`{"model":"fake/m1","messages":[{"role":"user","content":"hello"}]}`))
+```
+
 - [ ] **Step 4: Translate the request's texts**
 
 In `internal/gateway/gateway.go`, in `translate`, after the request is read and before it is used:
@@ -1190,7 +1205,7 @@ Expected: PASS.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add internal/gateway/gateway.go internal/gateway/middleware.go internal/gateway/codex_backend.go internal/gateway/translate_test.go
+git add internal/gateway/gateway.go internal/gateway/middleware.go internal/gateway/codex_backend.go internal/gateway/gateway_hook_test.go internal/gateway/translate_test.go
 git commit -m "gateway: a request's texts reach the model in the language asked
 
 The texts are translated on the request IR, so every client protocol, every
@@ -1213,6 +1228,7 @@ text."
 - Modify: `internal/gateway/continuation.go` (`streamTranslated` passes the translator)
 - Modify: `internal/gateway/relay_status.go` (`relayStatus` passes the translator; a whole reply's text is translated)
 - Modify: `internal/gateway/claude_subscription.go` (the Claude bridge's encoder is given no translator)
+- Modify: the gateway's own tests that build an encoder — `aistudio_thinking_test.go`, `automode_test.go`, `call_item_ids_test.go`, `format_fence_test.go`, `namespace_test.go`, `phase_test.go`, `response_id_test.go`, `search_call_ids_test.go`, `toolsearch_test.go` — the new argument is `nil` in each of them, as none of those tests is about a translation
 - Test: `internal/gateway/translate_test.go`
 
 **Interfaces:**
@@ -1238,9 +1254,9 @@ func (e *recordedEncoder) keepalive()      {}
 func TestTranslatedReplyKeepsItsOrder(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a8", "ka", []string{"m"}, m)
+	serveOn(t, "a16", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan("a8/m"))
+	tr := aTranslator(t, s, aPlan("a16/m"))
 	rec := &recordedEncoder{}
 	enc := &translateEncoder{streamEncoder: rec, tr: tr, ctx: tr.ctx}
 	enc.event(Event{Kind: KText, Text: "done"})
@@ -1266,13 +1282,37 @@ func TestTranslatedReplyKeepsItsOrder(t *testing.T) {
 func TestTranslatedWholeReply(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a9", "ka", []string{"m"}, m)
+	serveOn(t, "a17", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan("a9/m"))
+	tr := aTranslator(t, s, aPlan("a17/m"))
 	res := Result{Parts: []Part{{Kind: Text, Text: "done"}}}
 	tr.translateResult(context.Background(), &res)
 	if res.Parts[0].Text != "翻译" {
 		t.Fatalf("the reply: %+v", res.Parts[0])
+	}
+}
+
+// A reply the model gave in English reaches the client in Chinese, through
+// the whole gateway: the request's own side is Task 4's, and is already
+// there by now.
+func TestTranslatedReplyThroughTheGateway(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a13", "ka", []string{"m"}, m)
+	serveOn(t, "a14", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a14/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a13/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "翻译") {
+		t.Fatalf("the client was told: %s", rec.Body.String())
 	}
 }
 ```
@@ -1428,6 +1468,15 @@ In `internal/gateway/claude_subscription.go`, where the encoder is built for the
 		enc := encoder(from, sw, req, nil, usage)
 ```
 
+and in the gateway's own tests that build an encoder, the translator is
+`nil`, as it is in the Claude bridge's: those tests are not about a
+translation, and an encoder without a translator is the one every reply had
+before this change.
+
+```go
+	enc := encoder(provider.Responses, newSSEWriter(rec), req, nil)
+```
+
 - [ ] **Step 6: Translate a whole reply**
 
 In `internal/gateway/gateway.go`, in `translate`, before the reply is rendered:
@@ -1461,7 +1510,7 @@ Expected: PASS.
 - [ ] **Step 9: Commit**
 
 ```bash
-git add internal/gateway/translate_reply.go internal/gateway/gateway.go internal/gateway/continuation.go internal/gateway/relay_status.go internal/gateway/claude_subscription.go internal/gateway/translate_test.go
+git add internal/gateway/translate_reply.go internal/gateway/gateway.go internal/gateway/continuation.go internal/gateway/relay_status.go internal/gateway/claude_subscription.go internal/gateway/translate_test.go internal/gateway/aistudio_thinking_test.go internal/gateway/automode_test.go internal/gateway/call_item_ids_test.go internal/gateway/format_fence_test.go internal/gateway/namespace_test.go internal/gateway/phase_test.go internal/gateway/response_id_test.go internal/gateway/search_call_ids_test.go internal/gateway/toolsearch_test.go
 git commit -m "gateway: a reply's text reaches the client in the language asked
 
 The text is held while it is translated and the events that followed it
@@ -1479,7 +1528,7 @@ is told the English text."
 ### Task 6: The translation is told apart in the ledger
 
 **Files:**
-- Modify: `internal/gateway/gateway.go` (`callKind` learns the translation's kind)
+- Modify: `internal/gateway/codex_backend.go` (`callKind` learns the translation's kind)
 - Modify: `internal/usage/purpose.go` (the kind and its purpose)
 - Modify: `internal/gui/assets/purposes.js` (regenerated)
 - Modify: `internal/gui/assets/i18n.js` (the name in every language)
@@ -1509,7 +1558,7 @@ Expected: FAIL — the kind is "".
 
 - [ ] **Step 3: Give the kind its name**
 
-In `internal/gateway/gateway.go`, in `callKind`, after the `RouterAgent` case:
+In `internal/gateway/codex_backend.go`, in `callKind`, after the `RouterAgent` case:
 
 ```go
 	if v == "" && h.Get("User-Agent") == TranslateAgent {
@@ -1570,7 +1619,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/gateway/gateway.go internal/usage/purpose.go internal/gui/assets/purposes.js internal/gui/assets/i18n.js internal/gateway/translate_test.go
+git add internal/gateway/codex_backend.go internal/usage/purpose.go internal/gui/assets/purposes.js internal/gui/assets/i18n.js internal/gateway/translate_test.go
 git commit -m "usage: a translation is a kind of its own in the ledger
 
 A translation magpie made is told apart from the turn's own call, so the
