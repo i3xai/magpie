@@ -1198,7 +1198,36 @@ keeps the request it is given (the plan is on it), the second throws it away
 		_, _, b, done := gatewayHooks(w, req, provider.Chat, []byte(`{"model":"fake/m1","messages":[{"role":"user","content":"hello"}]}`))
 ```
 
-- [ ] **Step 4: Translate the request's texts**
+- [ ] **Step 4: Do not relay a request whose texts are translated**
+
+In `internal/gateway/gateway.go`, in `attempt`, a request that would be
+relayed — the client and the provider speaking the same protocol, which is
+the usual case — is relayed as it came: `passthrough` sends the client's own
+bytes and relays the provider's reply as it came, without the IR. Such a
+request never reaches `translate`, so its texts are never translated.
+
+A request whose texts are translated cannot be relayed as written, so it is
+asked on the client's own API instead and goes the way every other request
+goes, through the IR. Right before the line that gives a kept or a sealed
+request its relay back:
+
+```go
+	// a request whose texts are translated is not relayed as written: the
+	// relay would send the client's own words to the model, and the reply
+	// would come back in the language the model answered in. It goes the
+	// way every other request goes, through the IR (translate.go).
+	if relay && s.translatorFor(r) != nil {
+		relay, ownAPI = false, true
+	}
+	if (keep || sealed) && relayable {
+		relay, ownAPI = true, false
+	}
+```
+
+A native compaction and a sealed subagent's task keep their relay, so their
+texts are not translated: a translation would leave those out.
+
+- [ ] **Step 5: Translate the request's texts**
 
 In `internal/gateway/gateway.go`, in `translate`, after the request is read and before it is used:
 
@@ -1210,12 +1239,12 @@ In `internal/gateway/gateway.go`, in `translate`, after the request is read and 
 	}
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [ ] **Step 6: Run the test to verify it passes**
 
 Run: `go test -tags nogui ./internal/gateway -run 'TestTranslationThroughTheGateway|TestMagpiesOwnRequestIsNotTranslated' -count=1`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add internal/gateway/gateway.go internal/gateway/middleware.go internal/gateway/codex_backend.go internal/gateway/gateway_hook_test.go internal/gateway/translate_test.go
@@ -1224,6 +1253,13 @@ git commit -m "gateway: a request's texts reach the model in the language asked
 The texts are translated on the request IR, so every client protocol, every
 provider and every fallback attempt is covered by one change, and a tool's
 arguments and a tool's output are left as they are.
+
+A request whose texts are translated is not relayed as written: a relay
+sends the client's own bytes and never reaches the IR, so the client's own
+words would go to the model as they are. Such a request is asked on the
+client's own API instead, and goes the way every other request goes. A
+native compaction and a sealed subagent's task keep their relay, so their
+texts are not translated.
 
 Verified: go test -tags nogui ./internal/gateway -run
 'TestTranslationThroughTheGateway|TestMagpiesOwnRequestIsNotTranslated'.
@@ -1737,16 +1773,19 @@ names. The policy is a plugin's; the mechanism is the gateway's.
 1. A request an agent sent goes through `serveAgent`. Its hook round trip
    (`gatewayHooks`) asks the plugins' `onTranslate` for a plan, and the plan
    is kept on the request's context.
-2. `translate` reads the request into the IR, and the texts of the user and
+2. A request whose texts are to be translated is not relayed as written: a
+   relay sends the client's own bytes and never reaches the IR. It is asked
+   on the client's own API instead.
+3. `translate` reads the request into the IR, and the texts of the user and
    assistant messages are translated before the body is built for the
    provider. The system prompt, the tools, the tool calls, the tool results
    and the reasoning are left as they are.
-3. The provider is asked. Its reply is decoded into the IR's events.
-4. A streamed reply's text is held by `translateEncoder` and translated when
+4. The provider is asked. Its reply is decoded into the IR's events.
+5. A streamed reply's text is held by `translateEncoder` and translated when
    it ends; the events that came after it wait with it, so the client reads
    the answer in the order the model gave it. A whole reply's text parts are
    translated before it is rendered.
-5. The translation is asked of the model the plan names, through the gateway
+6. The translation is asked of the model the plan names, through the gateway
    itself (`askChatCtx`), so it is counted in the usage rows under its own
    kind and cannot ask the plugins again.
 
@@ -1758,6 +1797,9 @@ names. The policy is a plugin's; the mechanism is the gateway's.
 - A client that asked for structured output is not translated: its answer is
   JSON, and a translation of it is neither valid JSON nor the JSON the client
   asked for.
+- A request whose texts are translated is not relayed as written. A native
+  compaction and a sealed subagent's task keep their relay, so their texts
+  are not translated.  asked for.
 - A text that is already in the language wanted is left as it is, told by
   the script the plan named.
 - Both ends of a translation are kept, so a text a translation produced

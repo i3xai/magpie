@@ -50,6 +50,16 @@ which calls `buildChat`, `buildResponses`, `anthropicBody` and
 every provider, in every client protocol, on every fallback attempt, with no
 per-protocol byte surgery.
 
+There is one way out: when the client and the provider speak the same
+protocol, the request is **relayed** — `passthrough` in
+`internal/gateway/gateway.go` sends the client's own bytes and relays the
+provider's reply as it came, without the IR. A relayed request never reaches
+`translate`, and its reply never reaches an encoder. So a request whose
+texts are to be translated is not relayed as written: `attempt` asks it on
+the client's own API instead, and it goes the way every other request goes,
+through the IR. The price is the relay's byte-for-byte fidelity, which a
+request whose words are being changed has given up anyway.
+
 The primitive goes in `translate` in `internal/gateway/gateway.go`, right
 after `parseTranslated` and before the body is built.
 
@@ -229,6 +239,7 @@ Every failure leaves the request as it was:
 | The answer's count does not match | Every text of that call is left untranslated. |
 | The plugin's hook throws or is late | That plugin gives no plan. Another plugin's plan is asked, and the request is translated if one gives a usable plan. |
 | The client asked for structured output | Nothing is translated. Its answer is JSON, and a translation of it is neither valid JSON nor the JSON the client asked for. |
+| The request is a native compaction or a sealed subagent's task | It is relayed as it came, and its texts are not translated: a translation would leave those out. |
 
 The failure is counted in the usage rows and logged, at the rate the gateway
 logs its other failures.
@@ -248,7 +259,7 @@ logs its other failures.
 | File | Change |
 | --- | --- |
 | `internal/gateway/translate.go` | New. The two primitives, the cache, the plan and the scope. |
-| `internal/gateway/gateway.go` | `translate` calls the request-side primitive and translates a whole reply's text before it is rendered. |
+| `internal/gateway/gateway.go` | `attempt` does not relay a request whose texts are translated; `translate` calls the request-side primitive and translates a whole reply's text before it is rendered. |
 | `internal/gateway/continuation.go` | `streamTranslated` wraps the encoder with the reply's translator. |
 | `internal/gateway/relay_status.go` | `relayStatus` wraps the encoder and translates a whole reply's text. |
 | `internal/gateway/middleware.go` | `gatewayHooks` keeps the plan the plugin gave. |
