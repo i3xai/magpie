@@ -30,7 +30,8 @@ hooks](gateway-request-hooks.md).
 3. `translate` reads the request into the IR, and the texts of the user and
    assistant messages are translated before the body is built for the
    provider. The system prompt, the tools, the tool calls, the tool results
-   and the reasoning are left as they are.
+   and the reasoning are left as they are. A client that asked for structured
+   output is not translated at all (see the constraints below).
 4. The provider is asked. Its reply is decoded into the IR's events.
 5. A streamed reply's text is held by `translateEncoder` until the event that
    comes after it, and translated then: the text goes first and the events
@@ -56,9 +57,12 @@ hooks](gateway-request-hooks.md).
 - Only a message's text parts are translated, and only in the user and
   assistant messages. A tool's arguments are code, and a tool's output is
   what a command said.
-- A client that asked for structured output is not translated: its answer is
-  JSON, and a translation of it is neither valid JSON nor the JSON the client
-  asked for.
+- A client that asked for structured output is not translated at all: neither
+  its prompt nor its answer. Its answer is JSON, and a translation of it is
+  neither valid JSON nor the JSON the client asked for, so a translated
+  prompt alone would leave the client answered in a language it did not ask
+  in. The prompt is left as it came, so the model answers in the client's own
+  language and the JSON's values are in it too.
 - A request whose texts are translated is not relayed as written. A native
   compaction and a sealed subagent's task keep their relay, so their texts
   are not translated.

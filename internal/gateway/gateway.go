@@ -9623,8 +9623,12 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 		return writeError(w, from, 400, err.Error()), err.Error()
 	}
 	// the texts the plugin's translator wants in another language, before
-	// the body is built for the provider (translate.go)
-	if tr := s.requestTranslator(r); tr != nil {
+	// the body is built for the provider (translate.go). A client that asked
+	// for structured output is not translated at all: its answer is JSON, and
+	// a translation of it is neither valid JSON nor the JSON the client
+	// asked for, so a translated prompt alone would leave the client
+	// answered in a language it did not ask in.
+	if tr := s.requestTranslator(r); tr != nil && !request.wantsJSON() {
 		tr.translateRequestText(r.Context(), request)
 	}
 	if request.WebSearch {

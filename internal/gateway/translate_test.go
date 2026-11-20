@@ -619,6 +619,39 @@ func TestStructuredWholeReplyIsNotTranslated(t *testing.T) {
 	}
 }
 
+// A client that asked for structured output is not translated at all: its
+// prompt goes to the model as it came, and its answer comes back as the
+// model wrote it. A translation of the prompt alone would leave the client
+// answered in a language it did not ask in.
+func TestAStructuredClientIsNotTranslatedOnTheWayIn(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a37", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a38", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"answer\": \"done\"}"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a38/m","response_format":{"type":"json_object"},"messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a37/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the prompt was translated: %s", asked)
+	}
+	if m.calls() != 0 {
+		t.Fatalf("a translation was made: %d", m.calls())
+	}
+}
+
 // A translation is told apart from the turn's own call in the ledger.
 func TestTranslationHasItsOwnKind(t *testing.T) {
 	if got := callKind(http.Header{"User-Agent": []string{TranslateAgent}}); got != "translate" {
