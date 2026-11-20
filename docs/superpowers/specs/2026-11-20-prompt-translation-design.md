@@ -251,6 +251,9 @@ logs its other failures.
 - It does not translate a request magpie makes of itself: the titles, the
   classifier, the search and the vision stand-ins go through `serve` and are
   not agent requests.
+- It does not translate a request that goes to Codex's own sign-in (the
+  native path `/backend-api/codex`): that path sends the request as it came
+  and never builds the IR.
 - It does not translate the images, the files or the audio.
 - It does not change what B is asked, beyond the text it is given.
 

@@ -1799,7 +1799,10 @@ names. The policy is a plugin's; the mechanism is the gateway's.
   asked for.
 - A request whose texts are translated is not relayed as written. A native
   compaction and a sealed subagent's task keep their relay, so their texts
-  are not translated.  asked for.
+  are not translated.
+- A request that goes to Codex's own sign-in (the native path
+  `/backend-api/codex`) is not translated: that path sends the request as it
+  came and never builds the IR.  asked for.
 - A text that is already in the language wanted is left as it is, told by
   the script the plan named.
 - Both ends of a translation are kept, so a text a translation produced
