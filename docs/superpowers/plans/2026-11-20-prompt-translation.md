@@ -1083,7 +1083,8 @@ Add to `internal/gateway/translate_test.go`, and add `"github.com/yetone/magpie/
 
 Each test names a provider of its own, so the translations one test made are
 not another's: the translator's own tests already take a1 to a10, and the
-gateway's other tests take b and c.
+gateway's other tests take b and c. The tasks that follow take a11 and up:
+Task 4 takes a11 to a14, Task 5 takes a15 to a21.
 
 ```go
 // A request's Chinese prompt reaches the provider in English. The reply's
@@ -1116,18 +1117,30 @@ func TestTranslationThroughTheGateway(t *testing.T) {
 }
 
 // A request magpie makes of itself is not translated: it goes through serve
-// and not through the hooks, so it has no plan.
+// and not through the hooks, so it has no plan. The translator's model is
+// another one, so the call the request itself makes is not counted as a
+// translation.
 func TestMagpiesOwnRequestIsNotTranslated(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a15", "ka", []string{"m"}, m)
+	serveOn(t, "a13", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a14", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+	}))
 	s := New()
 	r := httptest.NewRequest("POST", "http://magpie/v1/chat/completions", nil)
 	r.Header.Set("User-Agent", RouterAgent)
 	rec := httptest.NewRecorder()
-	s.serve(rec, r, provider.Chat, []byte(`{"model":"a15/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	s.serve(rec, r, provider.Chat, []byte(`{"model":"a14/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
 	if m.calls() != 0 {
 		t.Fatalf("a translation was made: %d", m.calls())
+	}
+	if !strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the request was translated: %s", asked)
 	}
 }
 ```
@@ -1254,9 +1267,9 @@ func (e *recordedEncoder) keepalive()      {}
 func TestTranslatedReplyKeepsItsOrder(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a16", "ka", []string{"m"}, m)
+	serveOn(t, "a15", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan("a16/m"))
+	tr := aTranslator(t, s, aPlan("a15/m"))
 	rec := &recordedEncoder{}
 	enc := &translateEncoder{streamEncoder: rec, tr: tr, ctx: tr.ctx}
 	enc.event(Event{Kind: KText, Text: "done"})
@@ -1282,9 +1295,9 @@ func TestTranslatedReplyKeepsItsOrder(t *testing.T) {
 func TestTranslatedWholeReply(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a17", "ka", []string{"m"}, m)
+	serveOn(t, "a16", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan("a17/m"))
+	tr := aTranslator(t, s, aPlan("a16/m"))
 	res := Result{Parts: []Part{{Kind: Text, Text: "done"}}}
 	tr.translateResult(context.Background(), &res)
 	if res.Parts[0].Text != "翻译" {
@@ -1298,14 +1311,14 @@ func TestTranslatedWholeReply(t *testing.T) {
 func TestTranslatedReplyThroughTheGateway(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a13", "ka", []string{"m"}, m)
-	serveOn(t, "a14", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serveOn(t, "a17", "ka", []string{"m"}, m)
+	serveOn(t, "a18", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
 	}))
 	s := New()
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a14/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
-	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a13/m")))
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a18/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a17/m")))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -1322,9 +1335,9 @@ func TestTranslatedReplyThroughTheGateway(t *testing.T) {
 func TestStructuredOutputIsNotTranslated(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a18", "ka", []string{"m"}, m)
+	serveOn(t, "a19", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan("a18/m"))
+	tr := aTranslator(t, s, aPlan("a19/m"))
 	rec := &recordedEncoder{}
 	enc := encoder(provider.Responses, newSSEWriter(httptest.NewRecorder()), &Request{Model: "m", Format: &Format{Type: "json_object"}}, tr)
 	enc.event(Event{Kind: KText, Text: "done"})
@@ -1339,14 +1352,14 @@ func TestStructuredOutputIsNotTranslated(t *testing.T) {
 func TestStructuredWholeReplyIsNotTranslated(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a19", "ka", []string{"m"}, m)
-	serveOn(t, "a20", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serveOn(t, "a20", "ka", []string{"m"}, m)
+	serveOn(t, "a21", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"answer\": \"done\"}"}}]}`))
 	}))
 	s := New()
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a20/m","response_format":{"type":"json_object"},"messages":[{"role":"user","content":"帮我写个函数"}]}`))
-	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a19/m")))
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a21/m","response_format":{"type":"json_object"},"messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a20/m")))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != 200 {
