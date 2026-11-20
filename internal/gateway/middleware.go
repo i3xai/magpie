@@ -43,7 +43,7 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provide
 	if s.stoppedToolLoop(w, r, from, body) {
 		return
 	}
-	w, body, hooked := gatewayHooks(w, r, from, body)
+	w, r, body, hooked := gatewayHooks(w, r, from, body)
 	defer hooked()
 	agents := gwmw.AgentsWanted(middlewareWanted)
 	if len(agents) == 0 {
@@ -157,9 +157,12 @@ func middlewareWanted() bool { return middleware.On() > 0 }
 // leave is the one served, and they see the reply the agent got once it is
 // whole. Its writer wraps the middleware's, so what they see is what the
 // agent was given. With no hook it is the request as it came.
-func gatewayHooks(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) (http.ResponseWriter, []byte, func()) {
+//
+// The request it returns carries the plan a hook's onTranslate gave, so the
+// request's texts are translated for the model (translate.go).
+func gatewayHooks(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) (http.ResponseWriter, *http.Request, []byte, func()) {
 	if !plugin.HasGateway() {
-		return w, body, func() {}
+		return w, r, body, func() {}
 	}
 	info := plugin.GatewayContext{Origin: gatewayOrigin(r), Protocol: string(from), Model: modelOf(body), Stream: streamOf(body), Path: r.URL.Path, Agent: agentOf(r), Session: sessionOf(r.Header), Kind: hookKind(r, agentOf(r))}
 	if req, err := parse(from, body); err == nil {
@@ -172,10 +175,13 @@ func gatewayHooks(w http.ResponseWriter, r *http.Request, from provider.Protocol
 	run := plugin.GatewayBegin(r.Context(), body, info)
 	waited()
 	if run == nil {
-		return w, body, func() {}
+		return w, r, body, func() {}
+	}
+	if run.Translate != nil {
+		r = r.WithContext(withTranslatePlan(r.Context(), run.Translate))
 	}
 	w, done := gatewayResponse(w, r, from, run.Body, run)
-	return w, run.Body, func() { done(); run.Close() }
+	return w, r, run.Body, func() { done(); run.Close() }
 }
 
 // gatewayQuery uses the same user-authored words as routing, excluding

@@ -14,6 +14,7 @@ import (
 
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/provider"
 )
 
 // translateModel is a model that answers with the texts it was given, in
@@ -343,4 +344,66 @@ func TestTranslatorKeepsTheCacheWholeWhenTwoTranslateAtOnce(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+// A request's Chinese prompt reaches the provider in English. The reply's
+// own side is Task 5's, and is not asserted here.
+//
+// The provider is asked a stream, as every request that goes through the
+// gateway's translation is (translate.go), so the fake answers with one.
+func TestTranslationThroughTheGateway(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a11", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a12", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"done"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a12/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a11/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(asked, "translated") {
+		t.Fatalf("the provider was asked: %s", asked)
+	}
+	if strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the provider was asked in Chinese: %s", asked)
+	}
+}
+
+// A request magpie makes of itself is not translated: it goes through serve
+// and not through the hooks, so it has no plan. The translator's model is
+// another one, so the call the request itself makes is not counted as a
+// translation.
+func TestMagpiesOwnRequestIsNotTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a13", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a14", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	s := New()
+	r := httptest.NewRequest("POST", "http://magpie/v1/chat/completions", nil)
+	r.Header.Set("User-Agent", RouterAgent)
+	rec := httptest.NewRecorder()
+	s.serve(rec, r, provider.Chat, []byte(`{"model":"a14/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	if m.calls() != 0 {
+		t.Fatalf("a translation was made: %d", m.calls())
+	}
+	if !strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the request was translated: %s", asked)
+	}
 }

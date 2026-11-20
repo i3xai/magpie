@@ -6154,6 +6154,14 @@ func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.P
 	if relay && !keep && streamOnly {
 		relay, ownAPI = false, true
 	}
+	// a request whose texts are translated for the model is not relayed as
+	// it came: the texts are translated on the request IR, and the body is
+	// built from it for the provider (translate.go). A compaction and a
+	// sealed subagent's task are relayed all the same, below: a
+	// translation would lose them.
+	if relay && s.requestTranslator(r) != nil {
+		relay, ownAPI = false, true
+	}
 	if (keep || sealed) && relayable {
 		relay, ownAPI = true, false
 	}
@@ -9592,6 +9600,24 @@ func parseTranslated(from, to provider.Protocol, body []byte, advised bool) (*Re
 	return parseRequest(from, body, false, to == provider.Responses)
 }
 
+// requestTranslator is the translator of a request's texts, or nil when the
+// request is not translated: no plan, or the translation magpie makes of
+// itself, which is the translation and not a request to translate
+// (translate.go).
+func (s *Server) requestTranslator(r *http.Request) *translator {
+	if magpiesOwnTranslation(r) {
+		return nil
+	}
+	return s.translatorFor(r)
+}
+
+// magpiesOwnTranslation tells whether the request is the translation magpie
+// makes of itself: the call the plan's model is asked for the texts with
+// (translate.go). It is not translated: it is the translation.
+func magpiesOwnTranslation(r *http.Request) bool {
+	return r != nil && r.Header.Get("User-Agent") == TranslateAgent
+}
+
 // translate serves a client API the provider lacks by speaking another
 // one to it. The provider is always streamed; the client gets whichever
 // it asked for.
@@ -9606,6 +9632,11 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	request, err := parseTranslated(from, to, body, advised)
 	if err != nil {
 		return writeError(w, from, 400, err.Error()), err.Error()
+	}
+	// the texts the plugin's translator wants in another language, before
+	// the body is built for the provider (translate.go)
+	if tr := s.requestTranslator(r); tr != nil {
+		tr.translateRequestText(r.Context(), request)
 	}
 	if request.WebSearch {
 		// an API on which the provider searches by itself comes first;
