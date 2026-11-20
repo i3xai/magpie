@@ -647,6 +647,10 @@ type Settings struct {
 	// haiku needed more than 8, the default then): from 1 to ClassifyTimeoutMost, 0 for
 	// ClassifyTimeoutDefault. ClassifyWait reads it.
 	ClassifyTimeout int `json:"classifyTimeout,omitempty"`
+	// TranslateTimeout is how long, in seconds, a translation is given to
+	// answer: from 1 to TranslateTimeoutMost, 0 for TranslateTimeoutDefault.
+	// TranslateWait reads it.
+	TranslateTimeout int `json:"translateTimeout,omitempty"`
 	// GroupSink, GroupFirstToken and GroupPatience are what every routing
 	// group does that says nothing of its own (jiezhengj on Discord: set
 	// once, not in each group), as provider.Group's Sink, FirstToken and
@@ -1561,6 +1565,27 @@ func (s Settings) ClassifyWait() time.Duration {
 		n = ClassifyTimeoutDefault
 	}
 	return time.Duration(min(n, ClassifyTimeoutMost)) * time.Second
+}
+
+// TranslateTimeoutDefault is the seconds a translation is given when
+// TranslateTimeout is 0, and TranslateTimeoutMost the most it may be set to:
+// a whole reply is longer than a classifier's answer, and a long one takes
+// its model a while.
+const (
+	TranslateTimeoutDefault = 30
+	TranslateTimeoutMost    = 300
+)
+
+// TranslateWait is how long a translation is given to answer:
+// TranslateTimeout's seconds, TranslateTimeoutDefault's when it is 0 (or
+// below), and no more than TranslateTimeoutMost's when settings.json was
+// written by hand past it.
+func (s Settings) TranslateWait() time.Duration {
+	n := s.TranslateTimeout
+	if n < 1 {
+		n = TranslateTimeoutDefault
+	}
+	return time.Duration(min(n, TranslateTimeoutMost)) * time.Second
 }
 
 // CurrencyByProvider is Currency's choice of each provider's own currency.
@@ -2683,6 +2708,9 @@ func saveOwn(s Settings, recording, reads bool) error {
 	}
 	if s.ClassifyTimeout < 0 || s.ClassifyTimeout > ClassifyTimeoutMost {
 		return fmt.Errorf("a routing group's classifier is given from 1 to %d seconds, or 0 for %d, not %d", ClassifyTimeoutMost, ClassifyTimeoutDefault, s.ClassifyTimeout)
+	}
+	if s.TranslateTimeout < 0 || s.TranslateTimeout > TranslateTimeoutMost {
+		return fmt.Errorf("a translation is given from 1 to %d seconds, or 0 for %d, not %d", TranslateTimeoutMost, TranslateTimeoutDefault, s.TranslateTimeout)
 	}
 	if s.GroupFirstToken < 0 {
 		return fmt.Errorf("a routing group's member is given a number of seconds to its first token, or 0 to wait, not %d", s.GroupFirstToken)

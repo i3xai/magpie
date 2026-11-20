@@ -226,6 +226,9 @@ func Merge(body []byte, cur settings.Settings, web bool) (settings.Settings, err
 	if _, sent := fields["classifyTimeout"]; !sent {
 		in.ClassifyTimeout = cur.ClassifyTimeout
 	}
+	// and how long a translation is given to answer, which no page has a
+	// row for: it is in settings.json only, and a save of the page keeps it
+	in.TranslateTimeout = cur.TranslateTimeout
 	// nor what every routing group does that says nothing of its own,
 	// which the Routing groups page sets (jiezhengj on Discord)
 	if _, sent := fields["groupSink"]; !sent {

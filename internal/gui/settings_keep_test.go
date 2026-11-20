@@ -244,6 +244,8 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 	was.BarkServer, was.BarkKey, was.BarkDaily = "https://bark.example.com", "kept", "21:30"
 	// the Routing groups page's defaults for every group (groups/defaults)
 	was.GroupSink, was.GroupFirstToken, was.GroupPatience = true, 30, 120
+	// how long a translation is given to answer, in settings.json only
+	was.TranslateTimeout = 60
 	if err := settings.Save(was); err != nil {
 		t.Fatal(err)
 	}
