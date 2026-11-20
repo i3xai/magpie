@@ -504,6 +504,54 @@ func gatewayRequest(ctx context.Context, body []byte, info GatewayContext) []byt
 	return run.Body
 }
 
+// A request hook's onTranslate gives the gateway the plan it translates
+// with: the model, the languages, the scripts and the prompt.
+func TestGatewayHookTranslatePlan(t *testing.T) {
+	sandbox(t)
+	gatewayFixture(t, `export async function onTranslate(ctx) { return { model: "gemini-3-flash", from: "zh", to: "en", fromName: "Chinese", toName: "English", fromScript: "cjk", toScript: "latin", system: "Translate {from} into {to}." } }`)
+	run := GatewayBegin(t.Context(), []byte(`{"note":"original"}`), GatewayContext{Protocol: "chat", Model: "claude-opus-4-5"})
+	if run == nil {
+		t.Fatal("no run")
+	}
+	defer run.Close()
+	if run.Translate == nil {
+		t.Fatal("no translate plan")
+	}
+	if run.Translate.Model != "gemini-3-flash" || run.Translate.From != "zh" || run.Translate.To != "en" {
+		t.Fatalf("plan: %+v", run.Translate)
+	}
+	if run.Translate.FromScript != "cjk" || run.Translate.ToScript != "latin" {
+		t.Fatalf("scripts: %+v", run.Translate)
+	}
+	if run.Translate.System != "Translate {from} into {to}." {
+		t.Fatalf("system: %q", run.Translate.System)
+	}
+}
+
+// A hook that gives no plan leaves the gateway with none, and a plan that
+// says too little to translate with is no plan.
+func TestGatewayHookTranslatePlanRefused(t *testing.T) {
+	sandbox(t)
+	gatewayFixture(t, `export async function onTranslate() { return null }`)
+	run := GatewayBegin(t.Context(), []byte(`{"note":"original"}`), GatewayContext{Protocol: "chat"})
+	if run == nil {
+		t.Fatal("no run")
+	}
+	defer run.Close()
+	if run.Translate != nil {
+		t.Fatalf("a plan that was never given: %+v", run.Translate)
+	}
+	gatewayFixture(t, `export async function onTranslate() { return { model: "gemini-3-flash" } }`)
+	run = GatewayBegin(t.Context(), []byte(`{"note":"original"}`), GatewayContext{Protocol: "chat"})
+	if run == nil {
+		t.Fatal("no run")
+	}
+	defer run.Close()
+	if run.Translate != nil {
+		t.Fatalf("a plan without a language or a prompt: %+v", run.Translate)
+	}
+}
+
 // A JS gateway middleware (*.gateway.js, magpie.gateway) and a request hook
 // (*.hooks.js, magpie.hooks) never claim the same entry: a hook importing
 // node:fs loaded as middleware too would show "didn't load" for a plugin

@@ -1511,8 +1511,9 @@ async function loadPlugins(list) {
     let gateway
     if (p.gateway) {
       gateway = await import(pathToFileURL(p.gateway).href)
-      // a hook that only listens for sign-ins needs no onRequest
-      if (typeof gateway.onRequest !== "function" && typeof gateway.onSignIn !== "function") throw new Error("magpie.hooks exports no onRequest")
+      // a hook that only listens for sign-ins or gives a translation plan
+      // needs no onRequest
+      if (typeof gateway.onRequest !== "function" && typeof gateway.onSignIn !== "function" && typeof gateway.onTranslate !== "function") throw new Error("magpie.hooks exports no onRequest")
     }
     let fns = []
     // A gateway-only package needs no OpenCode entry. Mixed packages
@@ -1545,7 +1546,7 @@ async function loadPlugins(list) {
     }
     for (const x of r.got) hooks.push(x)
     if (r.gateway) gatewayHooks.push({ spec: p.spec, options: p.options ?? {}, onRequest: r.gateway.onRequest,
-      onResponse: r.gateway.onResponse, onSignIn: r.gateway.onSignIn,
+      onResponse: r.gateway.onResponse, onSignIn: r.gateway.onSignIn, onTranslate: r.gateway.onTranslate,
       state: { calls: 0, failures: 0, totalMillis: 0, lastOutcome: "idle", lastBytes: 0 } })
     if (!isPi) loaded.push({ spec: p.spec })
   }
@@ -1689,7 +1690,39 @@ async function gatewayBegin(p, signal) {
     signal.throwIfAborted()
     return null
   }
-  return { id: run.id, token: run.token, body }
+  // The translate plan: the first hook that gives one wins. The gateway
+  // asks the model itself, so the plan is a policy and not a call.
+  let translate = null
+  for (const h of gatewayHooks) {
+    if (total.aborted) break
+    if (typeof h.onTranslate !== "function") continue
+    const ctl = new AbortController()
+    const timer = setTimeout(() => ctl.abort(), gatewayTimeout(h))
+    const ownSignal = AbortSignal.any([total, ctl.signal])
+    try {
+      const ctx = { ...p.context, options: structuredClone(h.options), state: {}, signal: ownSignal, report: () => {} }
+      const plan = await bounded(Promise.resolve().then(() => h.onTranslate(ctx)), ownSignal)
+      if (plan && typeof plan === "object" && !Array.isArray(plan)) {
+        translate = {
+          model: typeof plan.model === "string" ? plan.model : "",
+          from: typeof plan.from === "string" ? plan.from : "",
+          to: typeof plan.to === "string" ? plan.to : "",
+          fromName: typeof plan.fromName === "string" ? plan.fromName : "",
+          toName: typeof plan.toName === "string" ? plan.toName : "",
+          fromScript: typeof plan.fromScript === "string" ? plan.fromScript : "",
+          toScript: typeof plan.toScript === "string" ? plan.toScript : "",
+          system: typeof plan.system === "string" ? plan.system : "",
+        }
+        break
+      }
+    } catch {
+      if (!signal.aborted) send({ event: "log", level: "warn", message: `${h.spec}: gateway translate hook failed; keeping request` })
+    } finally {
+      clearTimeout(timer)
+      ctl.abort()
+    }
+  }
+  return { id: run.id, token: run.token, body, translate }
 }
 
 async function gatewayFinish(run, p, signal) {

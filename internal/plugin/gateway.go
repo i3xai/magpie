@@ -97,6 +97,39 @@ type GatewayContext struct {
 	Kind string `json:"kind"`
 }
 
+// TranslatePlan is what a request hook's onTranslate gives the gateway: the
+// model to translate with, the two languages, and the prompt the texts go
+// through. The gateway asks the model itself, so a plan is a policy and not
+// a call: a hook that called back into magpie would have its own request
+// offered to onTranslate again.
+type TranslatePlan struct {
+	// Model is the model to ask, as magpie names it.
+	Model string `json:"model"`
+	// From and To are the two languages, as the plugin names them.
+	From string `json:"from"`
+	To   string `json:"to"`
+	// FromName and ToName are the languages as the prompt names them; they
+	// fill the prompt's {from} and {to}.
+	FromName string `json:"fromName"`
+	ToName   string `json:"toName"`
+	// FromScript and ToScript say how a language is written, so the gateway
+	// knows a text that is already in the language wanted: "cjk" for one
+	// written with Han ideographs and CJK marks, "latin" for one written
+	// with the Latin alphabet. An empty one is a language the gateway does
+	// not know, and a text in it is translated always.
+	FromScript string `json:"fromScript"`
+	ToScript   string `json:"toScript"`
+	// System is the prompt the texts go through. Its {from} and {to} are
+	// filled with the language names.
+	System string `json:"system"`
+}
+
+// Usable tells whether the plan says enough to translate with: a model to
+// ask, two languages and a prompt. A plan that does not is no plan.
+func (p *TranslatePlan) Usable() bool {
+	return p != nil && p.Model != "" && p.From != "" && p.To != "" && p.System != ""
+}
+
 // GatewayState is aggregate diagnostics for this host's lifetime. Outcomes
 // are fixed codes; no request text, credentials or private context is kept.
 type GatewayState struct {
@@ -222,6 +255,9 @@ var hasGateway atomic.Pointer[gatewaySeen]
 // before the response. Close releases its private state and cancels active I/O.
 type GatewayRun struct {
 	Body json.RawMessage
+	// Translate is the plan the hook's onTranslate gave, nil when the hook
+	// gave none.
+	Translate *TranslatePlan
 
 	h        *host
 	id       string
@@ -260,18 +296,22 @@ func GatewayBegin(ctx context.Context, body []byte, info GatewayContext) *Gatewa
 		return nil
 	}
 	var out struct {
-		ID    string          `json:"id"`
-		Token string          `json:"token"`
-		Body  json.RawMessage `json:"body"`
+		ID        string          `json:"id"`
+		Token     string          `json:"token"`
+		Body      json.RawMessage `json:"body"`
+		Translate *TranslatePlan  `json:"translate"`
 	}
 	err = h.call(total, "gatewayRequest", map[string]any{"operation": "begin", "body": json.RawMessage(body), "context": info}, &out)
 	if err != nil || out.ID == "" || out.Token == "" || len(out.Body) == 0 || out.Body[0] != '{' || !json.Valid(out.Body) {
 		return nil
 	}
+	if !out.Translate.Usable() {
+		out.Translate = nil
+	}
 	// the run ends when its owner finishes or closes it, never when the
 	// client goes: Codex hangs up on response.completed, and the reply it
 	// got is still the exchange to observe
-	return &GatewayRun{Body: out.Body, h: h, id: out.ID, token: out.Token}
+	return &GatewayRun{Body: out.Body, Translate: out.Translate, h: h, id: out.ID, token: out.Token}
 }
 
 // Finish schedules a bounded completion notification without waiting for it.
