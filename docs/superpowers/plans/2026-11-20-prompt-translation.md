@@ -1349,8 +1349,13 @@ func TestTranslatedReplyThroughTheGateway(t *testing.T) {
 	m := &translateModel{}
 	serveOn(t, "a17", "ka", []string{"m"}, m)
 	serveOn(t, "a18", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+		// the provider is asked a stream, as every request that goes
+		// through the gateway's translation is (translate.go), so the fake
+		// answers with one
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"done"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
 	}))
 	s := New()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a18/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
@@ -1390,8 +1395,13 @@ func TestStructuredWholeReplyIsNotTranslated(t *testing.T) {
 	m := &translateModel{}
 	serveOn(t, "a20", "ka", []string{"m"}, m)
 	serveOn(t, "a21", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"answer\": \"done\"}"}}]}`))
+		// the provider is asked a stream, as every request that goes
+		// through the gateway's translation is (translate.go), so the fake
+		// answers with one
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"answer\": \"done\"}"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
 	}))
 	s := New()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a21/m","response_format":{"type":"json_object"},"messages":[{"role":"user","content":"帮我写个函数"}]}`))
