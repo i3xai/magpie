@@ -1315,6 +1315,50 @@ func TestTranslatedReplyThroughTheGateway(t *testing.T) {
 		t.Fatalf("the client was told: %s", rec.Body.String())
 	}
 }
+
+// A client that asked for structured output is not translated: its answer
+// is JSON, and a translation of it is neither valid JSON nor the JSON the
+// client asked for.
+func TestStructuredOutputIsNotTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a18", "ka", []string{"m"}, m)
+	s := New()
+	tr := aTranslator(t, s, aPlan("a18/m"))
+	rec := &recordedEncoder{}
+	enc := encoder(provider.Responses, newSSEWriter(httptest.NewRecorder()), &Request{Model: "m", Format: &Format{Type: "json_object"}}, tr)
+	enc.event(Event{Kind: KText, Text: "done"})
+	enc.finish()
+	if len(rec.events) != 1 || rec.events[0].Text != "done" {
+		t.Fatalf("the structured answer was translated: %+v", rec.events)
+	}
+}
+
+// A whole answer a client asked to be JSON is not translated either: the
+// JSON it asked for is what it gets.
+func TestStructuredWholeReplyIsNotTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a19", "ka", []string{"m"}, m)
+	serveOn(t, "a20", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"{\"answer\": \"done\"}"}}]}`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a20/m","response_format":{"type":"json_object"},"messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a19/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "done") {
+		t.Fatalf("the client was told: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "翻译") {
+		t.Fatalf("the client's JSON was translated: %s", rec.Body.String())
+	}
+}
 ```
 
 - [ ] **Step 2: Run the test to verify it fails**
@@ -1439,7 +1483,12 @@ func encoder(proto provider.Protocol, w *sseWriter, r *Request, tr *translator, 
 		// JSON it asked for (format_fence.go)
 		enc = &fenceEncoder{streamEncoder: enc}
 	}
-	if tr != nil {
+	if tr != nil && !r.wantsJSON() {
+		// a client that asked for structured output is not translated: its
+		// answer is JSON, and a translation of it is neither valid JSON nor
+		// the JSON the client asked for. A half-translated answer is worse
+		// than an untranslated one.
+		//
 		// the text the client is told is translated, and the events that
 		// followed it wait for the translation (translate_reply.go)
 		enc = &translateEncoder{streamEncoder: enc, tr: tr, ctx: tr.ctx}
@@ -1482,7 +1531,7 @@ before this change.
 In `internal/gateway/gateway.go`, in `translate`, before the reply is rendered:
 
 ```go
-	if tr := s.translatorFor(r); tr != nil {
+	if tr := s.translatorFor(r); tr != nil && !request.wantsJSON() {
 		tr.translateResult(r.Context(), &res2)
 	}
 	out := renderUsage(from, res2, request, u)
@@ -1491,7 +1540,7 @@ In `internal/gateway/gateway.go`, in `translate`, before the reply is rendered:
 In `internal/gateway/relay_status.go`, before the whole reply is written:
 
 ```go
-	if tr := s.translatorFor(r); tr != nil {
+	if tr := s.translatorFor(r); tr != nil && !req.wantsJSON() {
 		tr.translateResult(r.Context(), &res)
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -1499,7 +1548,7 @@ In `internal/gateway/relay_status.go`, before the whole reply is written:
 
 - [ ] **Step 7: Run the test to verify it passes**
 
-Run: `go test -tags nogui ./internal/gateway -run 'TestTranslatedReply|TestTranslatedWholeReply' -count=1`
+Run: `go test -tags nogui ./internal/gateway -run 'TestTranslat|TestStructur' -count=1`
 Expected: PASS.
 
 - [ ] **Step 8: Run the gateway's tests**
@@ -1518,9 +1567,13 @@ wait with it, so the client reads the answer in the order the model gave
 it. A whole reply is translated before it is rendered, so a client that
 asked for no stream is given the same language a streaming client is.
 
-Verified: go test -tags nogui ./internal/gateway -run TestTranslatedReply,
-and the gateway's own tests. The test fails without the change: the client
-is told the English text."
+A client that asked for structured output is not translated: its answer is
+JSON, and a translation of it is neither valid JSON nor the JSON the
+client asked for.
+
+Verified: go test -tags nogui ./internal/gateway -run
+'TestTranslat|TestStructur', and the gateway's own tests. The test fails
+without the change: the client is told the English text."
 ```
 
 ---
@@ -1688,6 +1741,9 @@ names. The policy is a plugin's; the mechanism is the gateway's.
 - Only a message's text parts are translated, and only in the user and
   assistant messages. A tool's arguments are code, and a tool's output is
   what a command said.
+- A client that asked for structured output is not translated: its answer is
+  JSON, and a translation of it is neither valid JSON nor the JSON the client
+  asked for.
 - A text that is already in the language wanted is left as it is, told by
   the script the plan named.
 - Both ends of a translation are kept, so a text a translation produced
