@@ -1269,6 +1269,283 @@ text."
 
 ---
 
+### Task 4 — fix round 1: magpie's own calls are not translated
+
+**Files:**
+- Modify: `internal/gateway/translate.go` (`withoutTranslatePlan`)
+- Modify: `internal/gateway/middleware.go` (`ownAsk` takes the plan off)
+- Modify: `internal/gateway/classify.go` (`askChatCtx` takes the plan off)
+- Modify: `internal/gateway/codex_titles.go` (the three own calls take the plan off)
+- Modify: `internal/gateway/codex_backend.go` (the compaction's own summary ask and the fallback take the plan off)
+- Modify: `internal/gateway/gateway.go` (`requestTranslator` no longer asks the User-Agent)
+- Test: `internal/gateway/translate_test.go`
+
+**Why this round:** the plan rides on the agent's request's context, and
+magpie's own calls are made with that context. The review of Task 4 found every
+one of them translated as if it were the agent's: the vision stand-in was asked
+"翻译" instead of "Describe this image.", and the Anthropic search lost its
+`max_uses` (three became five), its `thinking` and its `output_config`, because
+a request with a plan is not relayed as it came.
+
+The design says "It does not translate a request magpie makes of itself: the
+titles, the classifier, the search and the vision stand-ins go through `serve`
+and are not agent requests." The plan now says what that means in code: the
+plan is taken off the context of every call magpie makes of itself.
+
+The calls that are magpie's own, and the marker each one already carries:
+
+| The call | Where | The marker |
+| --- | --- | --- |
+| the search, the vision stand-in, the advisor | `search.go`, `vision.go`, `advisor_serve.go` | `ownAsk` |
+| the router's call, the translation's own call | `classify.go` | `askChatCtx` |
+| the Codex titles, the Codex predictions | `codex_titles.go` | `titleCheckKey` |
+| the Codex compaction's summary | `codex_backend.go` | `askWhole`, `askCompaction` |
+
+The Codex fallback (Codex's turn served on magpie's accounts when Codex's own
+sign-in is too busy) is Codex's own turn and not magpie's own call, but it is
+not translated either: the IR drops the sealed reasoning and the compaction
+items Codex needs, and the rule that keeps the native path whole is the same
+one.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `internal/gateway/translate_test.go`. Each test names a provider of its
+own, so the translations one test made are not another's: Task 4 took a11 to
+a14, Task 5 took a15 to a21, and the ledger's own test took a22 and a23. This
+round takes a25 to a31.
+
+```go
+// A request magpie makes of itself is not translated: the plan rides on the
+// agent's request's context, and ownAsk is the marker that says this call is
+// magpie's own (the search, the vision stand-in, the advisor). The provider is
+// asked as it came, and no translation is made.
+func TestMagpiesOwnCallIsNotTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a25", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a26", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	s := New()
+	r := httptest.NewRequest("POST", "http://magpie/v1/chat/completions", nil)
+	r = r.WithContext(ownAsk(withTranslatePlan(r.Context(), aPlan("a25/m"))))
+	rec := httptest.NewRecorder()
+	s.serve(rec, r, provider.Chat, []byte(`{"model":"a26/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	if m.calls() != 0 {
+		t.Fatalf("a translation was made: %d", m.calls())
+	}
+	if !strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the request was translated: %s", asked)
+	}
+}
+```
+
+```go
+// The translation's own call is not translated: the model that translates is
+// asked with the text as it is, once. A translation of the translation would
+// ask the model again, and again.
+func TestTheTranslationIsNotTranslatedItself(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a27", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a28", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a28/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a27/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if m.calls() != 1 {
+		t.Fatalf("the translator's model was asked %d times", m.calls())
+	}
+	if len(m.asked[0]) != 1 || m.asked[0][0] != "帮我写个函数" {
+		t.Fatalf("the translator's model was asked: %q", m.asked[0])
+	}
+	if !strings.Contains(asked, "translated") {
+		t.Fatalf("the provider was asked: %s", asked)
+	}
+}
+```
+
+```go
+// The User-Agent of magpie's own translations does not opt a client out of
+// the translation: a client that sends it is translated all the same.
+func TestTheTranslatesUserAgentDoesNotOptTheClientOut(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a29", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a30", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a30/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req.Header.Set("User-Agent", TranslateAgent)
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a29/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if m.calls() != 1 {
+		t.Fatalf("the translator's model was asked %d times", m.calls())
+	}
+	if !strings.Contains(asked, "translated") {
+		t.Fatalf("the provider was asked: %s", asked)
+	}
+}
+```
+
+```go
+// A Codex title is magpie's own call: the title model is asked as it came,
+// and no translation is made.
+func TestTheCodexTitleIsNotTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a31", "ka", []string{"m"}, m)
+	// the title model, asked of the conversation's text
+	var asked string
+	serveOn(t, "a32", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(
+			`data: {"id":"c1","choices":[{"index":0,"delta":{"content":"Fix login bug"}}]}`,
+			`data: {"id":"c1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	...
+}
+```
+
+The title test drives the same request Codex sends for a thread's title (the
+one `codexProviderTitle` in `internal/gateway/codex_titles_test.go` sends), with
+the plan on the request's context. The plan is on the context the title call
+inherits, so the title model is asked with the Chinese text as it came.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `go test -tags nogui ./internal/gateway -run 'TestMagpiesOwnCallIsNotTranslated|TestTheTranslationIsNotTranslatedItself|TestTheTranslatesUserAgentDoesNotOptTheClientOut|TestTheCodexTitleIsNotTranslated' -count=1`
+
+Expected: FAIL — the own call is translated, and a client that sends the
+translator's User-Agent is not translated at all.
+
+- [ ] **Step 3: Take the plan off magpie's own calls**
+
+In `internal/gateway/translate.go`:
+
+```go
+// withoutTranslatePlan takes the plan off a context: a request magpie makes
+// of itself is not translated (the search, the vision stand-in, the advisor,
+// the router, the titles, the compaction). The plan rides on the agent's
+// request's context, and those calls are made with it.
+func withoutTranslatePlan(ctx context.Context) context.Context {
+	return context.WithValue(ctx, translateKey{}, (*plugin.TranslatePlan)(nil))
+}
+```
+
+In `internal/gateway/middleware.go`, `ownAsk`:
+
+```go
+func ownAsk(ctx context.Context) context.Context {
+	ctx = context.WithValue(context.WithValue(ctx, triedKey{}, mwRuns{}), agentTurnKey{}, false)
+	return withoutTranslatePlan(ctx)
+}
+```
+
+In `internal/gateway/classify.go`, `askChatCtx`:
+
+```go
+	// the call is magpie's own: the plan the agent's request carries is taken
+	// off it, so the router's call and the translation's own call are not
+	// translated (translate.go).
+	ctx = withoutTranslatePlan(ctx)
+```
+
+In `internal/gateway/codex_titles.go`, the three calls (the titles, the
+descriptions and the predictions) each take the plan off the context they
+build:
+
+```go
+	ctx := withoutTranslatePlan(context.WithValue(r.Context(), titleCheckKey{}, check))
+```
+
+In `internal/gateway/codex_backend.go`, the compaction's summary ask and the
+fallback take it off as well.
+
+- [ ] **Step 4: Drop the User-Agent guard**
+
+In `internal/gateway/gateway.go`:
+
+```go
+// requestTranslator is the translator of a request's texts, or nil when the
+// request is not translated: no plan.
+func (s *Server) requestTranslator(r *http.Request) *translator {
+	return s.translatorFor(r)
+}
+```
+
+and `magpiesOwnTranslation` goes away with it. The User-Agent of magpie's own
+translations stays: the ledger tells a translation's row from the turn's own by
+it (`callKind`).
+
+- [ ] **Step 5: The plan's own call reaches the request**
+
+The review found the link between the plugin's `onTranslate` and the request
+untested: deleting the three lines that put the plan on the request left the
+whole suite green. A test drives a plugin that gives a plan and asserts the
+provider is asked in English.
+
+The plugin's hooks need bun on `PATH` (`testenv.Bun(t)` skips the test
+otherwise), so the test is one that runs only where bun is there.
+
+- [ ] **Step 6: Run the tests to verify they pass**
+
+Run: `go test -tags nogui ./internal/gateway -run 'TestMagpiesOwnCallIsNotTranslated|TestTheTranslationIsNotTranslatedItself|TestTheTranslatesUserAgentDoesNotOptTheClientOut|TestTheCodexTitleIsNotTranslated' -count=1`
+
+Expected: PASS.
+
+- [ ] **Step 7: Correct the design and the reference**
+
+The design's row about a sealed request says it keeps its relay; it keeps its
+relay only when it could be relayed, and the row says so now. The design's
+rule about magpie's own calls names the calls; the reference says the same.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add internal/gateway/translate.go internal/gateway/middleware.go internal/gateway/classify.go internal/gateway/codex_titles.go internal/gateway/codex_backend.go internal/gateway/gateway.go internal/gateway/translate_test.go docs/superpowers/specs/2026-11-20-prompt-translation-design.md docs/subsystems/gateway-translation.md
+git commit -m "gateway: magpie's own calls are not translated
+
+The plan rode on the agent's request's context, and magpie's own calls are
+made with that context: the search, the vision stand-in, the advisor, the
+router, the titles and the compaction were translated as if they were the
+agent's. The vision stand-in was asked \"翻译\" instead of \"Describe this
+image.\", and the Anthropic search lost its max_uses, its thinking and its
+output_config, because a request with a plan is not relayed as it came.
+
+The plan is taken off the context of every call magpie makes of itself, and
+the User-Agent that told a translation from a turn is no longer a gate: a
+client that sends it is translated all the same.
+
+Verified: go test -tags nogui ./internal/gateway -run 'TestMagpiesOwnCallIsNotTranslated|
+TestTheTranslationIsNotTranslatedItself|TestTheTranslatesUserAgentDoesNotOptTheClientOut|
+TestTheCodexTitleIsNotTranslated'. The tests fail without the change: the
+own call is translated, and the client that sends the translator's
+User-Agent is not translated at all."
+```
+
+---
+
 ### Task 5: The reply's text reaches the client in Chinese
 
 **Files:**
