@@ -642,7 +642,13 @@ func (s *Server) askChat(wait time.Duration, held access.Identity, model string,
 // canceled the request", a 499 no failure, though no agent had
 // (ESern29751 on X).
 func (s *Server) askChatCtx(ctx context.Context, wait time.Duration, held access.Identity, model, agent string, body []byte) (string, error) {
-	ctx, cancel := context.WithTimeoutCause(ctx, wait, sideTimedOut{"decision model", wait})
+	// what the call is called in the usage log's cause: the router's own
+	// call is a decision model's, a translation's a translation's.
+	what := "translation"
+	if agent == RouterAgent {
+		what = "decision model"
+	}
+	ctx, cancel := context.WithTimeoutCause(ctx, wait, sideTimedOut{what, wait})
 	defer cancel()
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://magpie/v1/chat/completions", nil)
 	if err != nil {
@@ -656,10 +662,15 @@ func (s *Server) askChatCtx(ctx context.Context, wait time.Duration, held access
 	w := httptest.NewRecorder()
 	s.serve(w, r, provider.Chat, body)
 	if ctx.Err() != nil {
-		if agent == RouterAgent && wait < classifyTimeout() {
-			return "", cutShort(model, wait, classifyTimeout())
+		if agent == RouterAgent {
+			// the router's call names the model that gave no answer, as
+			// it did before a translation had an agent of its own.
+			if wait < classifyTimeout() {
+				return "", cutShort(model, wait, classifyTimeout())
+			}
+			return "", fmt.Errorf("%s gave no answer in %s", model, wait)
 		}
-		return "", fmt.Errorf("%s gave no answer in %s", agent, wait)
+		return "", fmt.Errorf("the translation asked of %s gave no answer in %s", model, wait)
 	}
 	var out struct {
 		Choices []struct {

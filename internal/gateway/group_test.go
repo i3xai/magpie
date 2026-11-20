@@ -64,6 +64,7 @@ func fresh(t *testing.T) {
 	levelled.Lock()
 	levelled.m = map[string]levelling{}
 	levelled.Unlock()
+	forgetTranslations()
 	provider.ForgetCopilotForTest()
 	provider.ForgetRemoteCardsForTest()
 	provider.ForgetKeptCardsForTest()

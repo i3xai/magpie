@@ -25,7 +25,10 @@ type translator struct {
 	s    *Server
 	plan *plugin.TranslatePlan
 	held access.Identity
-	ctx  context.Context
+	// ctx is the request's own context: the reply's half of the exchange
+	// reads it (the encoder that carries the reply's texts takes the
+	// translator's context as its own), so it is kept here for it.
+	ctx context.Context
 }
 
 // translatorFor is the translator of a request, from the plan its plugin
@@ -241,24 +244,26 @@ func needsTranslation(text string, script string) bool {
 // costs no call to be sent to a model in the other language.
 //
 // The cache lives for the process and every request the gateway serves
-// reaches it, so each pair's entries are under its own lock.
+// reaches it, so each pair's entries are under its own lock, and the pairs
+// themselves are bounded: the oldest go first.
 var translateCache = &translations{byPair: map[string]*translationPair{}}
 
 type translations struct {
 	mu     sync.Mutex
 	byPair map[string]*translationPair
+	// order is the pairs in the order they were made, and head the
+	// oldest one still in it.
+	order []string
+	head  int
 }
 
 // translationPair is the cache of one plan's two languages, model and
 // prompt. Its lock guards the entries and the order they were kept in.
 type translationPair struct {
-	mu       sync.Mutex
-	from, to string
-	model    string
-	system   string
-	entries  map[string]translationEntry
-	order    []string
-	head     int
+	mu      sync.Mutex
+	entries map[string]translationEntry
+	order   []string
+	head    int
 }
 
 // translationEntry is one text of a pair and the text on the other side of
@@ -271,15 +276,30 @@ type translationEntry struct {
 // translationPairMost is the most texts a pair keeps; the oldest go first.
 const translationPairMost = 2048
 
-// pair is the cache of a plan's two languages and model, made once.
+// translationPairsMost is the most pairs of languages, model and prompt the
+// cache keeps; the oldest go first. A plugin that varies its prompt from
+// one request to the next must not grow the map for the life of the process.
+const translationPairsMost = 64
+
+// pair is the cache of a plan's two languages, model and prompt, made once.
 func (t *translations) pair(plan *plugin.TranslatePlan) *translationPair {
 	key := plan.From + "\x00" + plan.To + "\x00" + plan.Model + "\x00" + plan.System
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	p, ok := t.byPair[key]
 	if !ok {
-		p = &translationPair{from: plan.From, to: plan.To, model: plan.Model, system: plan.System, entries: map[string]translationEntry{}}
+		p = &translationPair{entries: map[string]translationEntry{}}
 		t.byPair[key] = p
+		t.order = append(t.order, key)
+		// the oldest pair goes first, as the oldest text of a pair does
+		for len(t.order)-t.head > translationPairsMost {
+			delete(t.byPair, t.order[t.head])
+			t.head++
+		}
+		if t.head > 1024 {
+			t.order = append(t.order[:0], t.order[t.head:]...)
+			t.head = 0
+		}
 	}
 	return p
 }
@@ -311,10 +331,14 @@ func (p *translationPair) remember(from, to string) {
 // put keeps a text of the pair; the pair's lock is held.
 func (p *translationPair) put(text string, e translationEntry) {
 	key := translateHash(text)
-	if _, ok := p.entries[key]; !ok {
-		p.order = append(p.order, key)
+	// a text put again is the newest text of the pair: the copy of its
+	// key the order kept behind is taken out, so the window never drops
+	// the live entry when it passes that copy.
+	if at := p.indexOf(key); at >= 0 {
+		p.order = append(p.order[:at], p.order[at+1:]...)
 	}
 	p.entries[key] = e
+	p.order = append(p.order, key)
 	for len(p.order)-p.head > translationPairMost {
 		delete(p.entries, p.order[p.head])
 		p.head++
@@ -323,6 +347,17 @@ func (p *translationPair) put(text string, e translationEntry) {
 		p.order = append(p.order[:0], p.order[p.head:]...)
 		p.head = 0
 	}
+}
+
+// indexOf is where a key sits in the order the texts were kept in, from the
+// oldest one still in it, or -1 for none.
+func (p *translationPair) indexOf(key string) int {
+	for i := p.head; i < len(p.order); i++ {
+		if p.order[i] == key {
+			return i
+		}
+	}
+	return -1
 }
 
 // translateHash is a text's key in a pair's cache.

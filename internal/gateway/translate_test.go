@@ -10,7 +10,9 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/plugin"
 )
 
@@ -40,12 +42,16 @@ func (m *translateModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	m.asked = append(m.asked, texts)
 	m.mu.Unlock()
-	// the answer is in the other script, as a translation's is
-	answer := "translated"
-	if len(texts) > 0 && !holdsCJK(texts[0]) {
-		answer = "翻译"
+	// the answers are in the other script, as a translation's are: one for
+	// each text asked for, in the order they were asked for
+	answers := make([]string, len(texts))
+	for i, text := range texts {
+		answers[i] = "translated"
+		if !holdsCJK(text) {
+			answers[i] = "翻译"
+		}
 	}
-	arr, _ := json.Marshal([]string{answer})
+	arr, _ := json.Marshal(answers)
 	content, _ := json.Marshal(string(arr))
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"choices":[{"message":{"content":` + string(content) + `}}]}`))
@@ -81,6 +87,17 @@ func aTranslator(t *testing.T, s *Server, plan *plugin.TranslatePlan) *translato
 		t.Fatal("no translator")
 	}
 	return tr
+}
+
+// forgetTranslations clears the translations kept, so a test run again
+// (-count) starts where it did the first time: a text the cache knows would
+// be found in it and never asked for again.
+func forgetTranslations() {
+	translateCache.mu.Lock()
+	defer translateCache.mu.Unlock()
+	translateCache.byPair = map[string]*translationPair{}
+	translateCache.order = nil
+	translateCache.head = 0
 }
 
 // A plan's texts are asked of the model the plan names, and the texts come
@@ -169,8 +186,140 @@ func TestTranslatorKeepsTheTextsWhenTheModelFails(t *testing.T) {
 	}
 }
 
+// A batch of texts is answered in the order they were asked for: each
+// answer is put back where its own text was.
+func TestTranslatorAnswersABatchInOrder(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a7", "ka", []string{"m"}, m)
+	s := New()
+	plan := aPlan("a7/m")
+	// the core knows no script for this language, so every text of it is
+	// translated: a Chinese one and an English one, answered in the
+	// scripts opposite their own.
+	plan.ToScript = ""
+	tr := aTranslator(t, s, plan)
+	out := tr.translate(context.Background(), []string{"你好", "hello"}, true)
+	if len(out) != 2 || out[0] != "translated" || out[1] != "翻译" {
+		t.Fatalf("translated: %q", out)
+	}
+	if m.calls() != 1 {
+		t.Fatalf("calls: %d", m.calls())
+	}
+	if len(m.asked[0]) != 2 || m.asked[0][0] != "你好" || m.asked[0][1] != "hello" {
+		t.Fatalf("asked for: %q", m.asked[0])
+	}
+}
+
+// A request's texts are translated; the system prompt, a tool's arguments,
+// a tool's output and the reasoning are left as they are: a tool's
+// arguments are code, and a result is what a command said.
+func TestTranslatorLeavesTheToolsAndTheSystemAlone(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a8", "ka", []string{"m"}, m)
+	s := New()
+	tr := aTranslator(t, s, aPlan("a8/m"))
+	req := &Request{
+		Messages: []Message{
+			{Role: "system", Parts: []Part{{Kind: Text, Text: "你是助手"}}},
+			{Role: "user", Parts: []Part{{Kind: Text, Text: "你好"}}},
+			{Role: "assistant", Parts: []Part{
+				{Kind: Thinking, Text: "先想一下"},
+				{Kind: ToolCall, Name: "Bash", Args: json.RawMessage(`{"command":"ls"}`)},
+				{Kind: Text, Text: "世界"},
+			}},
+			{Role: "user", Parts: []Part{{Kind: ToolResult, Text: "你好, 文件"}}},
+		},
+	}
+	tr.translateRequestText(context.Background(), req)
+	// the user's and the assistant's texts are translated
+	if req.Messages[1].Parts[0].Text != "translated" {
+		t.Fatalf("the user's text: %q", req.Messages[1].Parts[0].Text)
+	}
+	if req.Messages[2].Parts[2].Text != "translated" {
+		t.Fatalf("the assistant's text: %q", req.Messages[2].Parts[2].Text)
+	}
+	// the system prompt, the reasoning, the tool call and the tool's result
+	// are as they were
+	if req.Messages[0].Parts[0].Text != "你是助手" {
+		t.Fatalf("the system prompt: %q", req.Messages[0].Parts[0].Text)
+	}
+	if req.Messages[2].Parts[0].Text != "先想一下" {
+		t.Fatalf("the reasoning: %q", req.Messages[2].Parts[0].Text)
+	}
+	if string(req.Messages[2].Parts[1].Args) != `{"command":"ls"}` {
+		t.Fatalf("the tool call's arguments: %s", req.Messages[2].Parts[1].Args)
+	}
+	if req.Messages[3].Parts[0].Text != "你好, 文件" {
+		t.Fatalf("the tool's result: %q", req.Messages[3].Parts[0].Text)
+	}
+}
+
+// A text put back is the newest text of its pair: the cache does not drop
+// it when the window passes the copy of its key it kept behind.
+func TestTranslatorKeepsATextThatWasPutBack(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a9", "ka", []string{"m"}, m)
+	s := New()
+	tr := aTranslator(t, s, aPlan("a9/m"))
+	pair := translateCache.pair(tr.plan)
+	// the pair is filled to its bound
+	for i := range translationPairMost / 2 {
+		pair.remember(fmt.Sprintf("你好%d", i), fmt.Sprintf("hello%d", i))
+	}
+	// the first text is put back: it is the newest text of the pair again
+	pair.remember("你好0", "hello0")
+	// and the window passing the copy of its key it kept behind does not
+	// drop it
+	pair.remember("再见", "bye")
+	if _, ok := pair.lookup("你好0", true); !ok {
+		t.Fatal("the text put back was dropped")
+	}
+}
+
+// The cache keeps a bounded number of pairs: a plugin that varies its
+// prompt from one request to the next must not grow it for the life of the
+// process.
+func TestTranslatorKeepsThePairsBounded(t *testing.T) {
+	fresh(t)
+	first := &plugin.TranslatePlan{Model: "m", From: "zh", To: "en", System: "the first prompt"}
+	translateCache.pair(first).remember("你好", "hello")
+	for i := range translationPairsMost {
+		translateCache.pair(&plugin.TranslatePlan{Model: "m", From: "zh", To: "en", System: fmt.Sprintf("prompt %d", i)})
+	}
+	// the oldest pair is gone: the texts it kept are not found any more
+	if _, ok := translateCache.pair(first).lookup("你好", true); ok {
+		t.Fatal("the oldest pair was kept")
+	}
+}
+
+// A call that gave no answer names what gave no answer: the router's call
+// names the model, as it did before a translation had an agent of its own,
+// and a translation's names the translation.
+func TestAskChatCtxNamesWhatGaveNoAnswer(t *testing.T) {
+	fresh(t)
+	serveOn(t, "a10", "ka", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"hi"}}]}`))
+	}))
+	s := New()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // the caller's context is ended before the call
+	body := []byte(`{"model":"a10/m"}`)
+	_, err := s.askChatCtx(ctx, 60*time.Second, access.Identity{}, "a10/m", RouterAgent, body)
+	if err == nil || !strings.Contains(err.Error(), "a10/m gave no answer") || strings.Contains(err.Error(), RouterAgent) {
+		t.Fatalf("the router's call: %v", err)
+	}
+	_, err = s.askChatCtx(ctx, 60*time.Second, access.Identity{}, "a10/m", TranslateAgent, body)
+	if err == nil || !strings.Contains(err.Error(), "the translation asked of a10/m gave no answer") {
+		t.Fatalf("the translation's call: %v", err)
+	}
+}
+
 // The cache lives for the gateway's life and every request reaches it, so
-// two translations at once may not write over each other.
+// two translations at once may not write over each other, and each gets
+// what it asked for.
 func TestTranslatorKeepsTheCacheWholeWhenTwoTranslateAtOnce(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
@@ -183,7 +332,13 @@ func TestTranslatorKeepsTheCacheWholeWhenTwoTranslateAtOnce(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			for j := range 10 {
-				tr.translate(context.Background(), []string{fmt.Sprintf("你好%d-%d", i, j)}, true)
+				for _, text := range []string{fmt.Sprintf("你好%d-%d", i, j), "共同的"} {
+					out := tr.translate(context.Background(), []string{text}, true)
+					if len(out) != 1 || out[0] != "translated" {
+						t.Errorf("%q was translated to %q", text, out)
+						return
+					}
+				}
 			}
 		}(i)
 	}
