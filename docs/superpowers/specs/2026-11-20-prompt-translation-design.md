@@ -111,6 +111,7 @@ export async function onTranslate(ctx) {
     model: "gemini-3-flash",                 // model A, a model magpie routes
     from: "zh", to: "en",
     fromName: "Chinese", toName: "English",
+    fromScript: "cjk", toScript: "latin",    // the scripts the two sides are written in
     system: "Translate the following {from} text into {to}. Keep code, identifiers and formatting as they are. Output only the translation."
   };
 }
