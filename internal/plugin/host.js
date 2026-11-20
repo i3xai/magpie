@@ -1690,8 +1690,10 @@ async function gatewayBegin(p, signal) {
     signal.throwIfAborted()
     return null
   }
-  // The translate plan: the first hook that gives one wins. The gateway
-  // asks the model itself, so the plan is a policy and not a call.
+  // The translate plan: the first hook that gives one the gateway can use
+  // wins. A hook that gives none leaves the next hook free to give one.
+  // The gateway asks the model itself, so the plan is a policy and not a
+  // call.
   let translate = null
   for (const h of gatewayHooks) {
     if (total.aborted) break
@@ -1699,11 +1701,21 @@ async function gatewayBegin(p, signal) {
     const ctl = new AbortController()
     const timer = setTimeout(() => ctl.abort(), gatewayTimeout(h))
     const ownSignal = AbortSignal.any([total, ctl.signal])
+    const started = performance.now()
+    let outcome = "skipped", bytes = 0
     try {
-      const ctx = { ...p.context, options: structuredClone(h.options), state: {}, signal: ownSignal, report: () => {} }
+      // Diagnostics accept fixed codes and byte counts only, as the request
+      // hook's report does. Never retain exception messages, queries, scope
+      // IDs, credentials or recalled text.
+      const report = (code, count = 0) => {
+        if (ownSignal.aborted || !["ready", "empty", "unbound", "unauthorized", "unavailable", "invalid", "skipped"].includes(code)) return
+        outcome = code
+        bytes = Number.isSafeInteger(count) && count >= 0 && count <= 32768 ? count : 0
+      }
+      const ctx = { ...p.context, options: structuredClone(h.options), state: {}, signal: ownSignal, report }
       const plan = await bounded(Promise.resolve().then(() => h.onTranslate(ctx)), ownSignal)
       if (plan && typeof plan === "object" && !Array.isArray(plan)) {
-        translate = {
+        const next = {
           model: typeof plan.model === "string" ? plan.model : "",
           from: typeof plan.from === "string" ? plan.from : "",
           to: typeof plan.to === "string" ? plan.to : "",
@@ -1713,11 +1725,26 @@ async function gatewayBegin(p, signal) {
           toScript: typeof plan.toScript === "string" ? plan.toScript : "",
           system: typeof plan.system === "string" ? plan.system : "",
         }
-        break
+        // A plan that names no model, no language or no prompt is no plan:
+        // the next hook is asked instead. Keep it the same as
+        // TranslatePlan.Usable in gateway.go.
+        if (next.model && next.from && next.to && next.system) {
+          translate = next
+          if (outcome === "skipped") outcome = "ready"
+          break
+        }
       }
     } catch {
-      if (!signal.aborted) send({ event: "log", level: "warn", message: `${h.spec}: gateway translate hook failed; keeping request` })
+      if (ownSignal.aborted) outcome = signal.aborted ? "cancelled" : "timeout"
+      else if (!["unbound", "unauthorized", "unavailable", "invalid"].includes(outcome)) outcome = "error"
+      // Exception text may contain tokens or recalled private material.
+      if (!signal.aborted) send({ event: "log", level: "warn", message: `${h.spec}: gateway translate hook failed or timed out; keeping request` })
     } finally {
+      h.state.calls++
+      if (["timeout", "error", "unauthorized", "unavailable", "invalid"].includes(outcome)) h.state.failures++
+      h.state.totalMillis += performance.now() - started
+      h.state.lastOutcome = outcome
+      h.state.lastBytes = outcome === "ready" ? bytes : 0
       clearTimeout(timer)
       ctl.abort()
     }

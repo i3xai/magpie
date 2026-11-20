@@ -552,6 +552,112 @@ func TestGatewayHookTranslatePlanRefused(t *testing.T) {
 	}
 }
 
+// A hook that gives a plan too poor to translate with leaves the next hook
+// free to give one that can be used: a plan that names no model, no
+// language or no prompt is no plan.
+func TestGatewayHookTranslatePlanAsksTheNextHook(t *testing.T) {
+	sandbox(t)
+	gatewayFixture(t, `export async function onTranslate() { return { model: "gemini-3-flash" } }`)
+	asked := filepath.Join(t.TempDir(), "asked")
+	second := gatewayFixture(t, `import fs from "node:fs";
+export async function onTranslate(ctx) {
+  fs.writeFileSync(ctx.options.asked, "asked");
+  return { model: "gemini-3-flash", from: "zh", to: "en", fromName: "Chinese", toName: "English", fromScript: "cjk", toScript: "latin", system: "Translate {from} into {to}." }
+}`)
+	if err := SetOptions(second, map[string]any{"asked": asked}); err != nil {
+		t.Fatal(err)
+	}
+	run := GatewayBegin(t.Context(), []byte(`{"note":"original"}`), GatewayContext{Protocol: "chat"})
+	if run == nil {
+		t.Fatal("no run")
+	}
+	defer run.Close()
+	if run.Translate == nil {
+		t.Fatal("no translate plan")
+	}
+	if run.Translate.From != "zh" || run.Translate.To != "en" {
+		t.Fatalf("plan: %+v", run.Translate)
+	}
+	if b, err := os.ReadFile(asked); err != nil || string(b) != "asked" {
+		t.Fatalf("the hook after the one with no usable plan was not asked: %q (%v)", b, err)
+	}
+}
+
+// The host and the gateway agree on what a plan says enough to translate
+// with: the host asks the next hook when Go's Usable refuses the plan, and
+// takes the first one Go accepts. The plan's fields come from the Go type
+// itself and the rule from Go's Usable, so a rule changed on either side
+// is caught here.
+func TestGatewayHookTranslatePlanUsableAgreesWithTheHost(t *testing.T) {
+	typ := reflect.TypeOf(TranslatePlan{})
+	full := map[string]string{}
+	var fields []string
+	for i := range typ.NumField() {
+		name := strings.Split(typ.Field(i).Tag.Get("json"), ",")[0]
+		fields = append(fields, name)
+		full[name] = "gemini-3-flash"
+	}
+	full["system"] = "the first hook's prompt"
+	for _, field := range fields {
+		t.Run(field, func(t *testing.T) {
+			sandbox(t)
+			first := map[string]string{}
+			for k, v := range full {
+				first[k] = v
+			}
+			delete(first, field)
+			var plan TranslatePlan
+			if err := json.Unmarshal(mustJSON(t, first), &plan); err != nil {
+				t.Fatal(err)
+			}
+			gatewayFixture(t, `export async function onTranslate() { return `+string(mustJSON(t, first))+` }`)
+			second := map[string]string{}
+			for k, v := range full {
+				second[k] = v
+			}
+			second["system"] = "the second hook's prompt"
+			gatewayFixture(t, `export async function onTranslate() { return `+string(mustJSON(t, second))+` }`)
+			run := GatewayBegin(t.Context(), []byte(`{"note":"original"}`), GatewayContext{Protocol: "chat"})
+			if run == nil {
+				t.Fatal("no run")
+			}
+			defer run.Close()
+			if run.Translate == nil {
+				t.Fatal("no translate plan")
+			}
+			want := second["system"]
+			if plan.Usable() {
+				want = full["system"]
+			}
+			if run.Translate.System != want {
+				t.Fatalf("the host and Go's Usable disagree about a plan without %s: %+v", field, run.Translate)
+			}
+		})
+	}
+}
+
+// A hook whose onTranslate fails is counted in the plugin's own
+// diagnostics, and the request keeps the body it had.
+func TestGatewayHookTranslateFailureIsCounted(t *testing.T) {
+	sandbox(t)
+	spec := gatewayFixture(t, `export async function onTranslate() { throw new Error("no plan today") }`)
+	run := GatewayBegin(t.Context(), []byte(`{"note":"original"}`), GatewayContext{Protocol: "chat"})
+	if run == nil {
+		t.Fatal("no run")
+	}
+	defer run.Close()
+	if string(run.Body) != `{"note":"original"}` {
+		t.Fatalf("a failed translate hook changed the request: %s", run.Body)
+	}
+	if run.Translate != nil {
+		t.Fatalf("a plan from a hook that failed: %+v", run.Translate)
+	}
+	state := GatewayStates(t.Context())[spec]
+	if state.Calls != 1 || state.Failures != 1 || state.LastOutcome != "error" {
+		t.Fatalf("the failure was not counted: %+v", state)
+	}
+}
+
 // A JS gateway middleware (*.gateway.js, magpie.gateway) and a request hook
 // (*.hooks.js, magpie.hooks) never claim the same entry: a hook importing
 // node:fs loaded as middleware too would show "didn't load" for a plugin
