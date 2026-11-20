@@ -1692,6 +1692,7 @@ change: the kind is empty."
 - Create: `docs/subsystems/gateway-translation.md`
 - Modify: `docs/subsystems/gateway-request-hooks.md` (the `onTranslate` hook)
 - Modify: `docs/subsystems/README.md` (the new reference in the table)
+- Modify: `docs/superpowers/specs/2026-11-20-prompt-translation-design.md` (the failure table's two rows: a hook that throws is now per-plugin, and a client that asked for structured output is not translated)
 
 **Interfaces:**
 - Consumes: everything the tasks above built.
@@ -1801,15 +1802,27 @@ In `docs/subsystems/README.md`, in the table, after the "Asynchronous gateway re
 | A request's texts translated for a model, and the reply translated back | [Prompt translation](gateway-translation.md) |
 ```
 
-- [ ] **Step 4: Check the links resolve**
+- [ ] **Step 4: Correct the design's failure table**
+
+In `docs/superpowers/specs/2026-11-20-prompt-translation-design.md`, in the
+failure table, the row about a hook that throws or is late now reads per
+plugin (the fix of Task 2 lets the next plugin be asked), and a row for a
+client that asked for structured output is added:
+
+```markdown
+| The plugin's hook throws or is late | That plugin gives no plan. Another plugin's plan is asked, and the request is translated if one gives a usable plan. |
+| The client asked for structured output | Nothing is translated. Its answer is JSON, and a translation of it is neither valid JSON nor the JSON the client asked for. |
+```
+
+- [ ] **Step 5: Check the links resolve**
 
 Run: `grep -o '(\.\./\.\./[a-z/-]*\.go)' docs/subsystems/gateway-translation.md | tr -d '()' | sed 's|\.\./\.\./||' | while read -r f; do test -f "$f" || echo "missing: $f"; done`
 Expected: nothing printed.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add docs/subsystems/gateway-translation.md docs/subsystems/gateway-request-hooks.md docs/subsystems/README.md
+git add docs/subsystems/gateway-translation.md docs/subsystems/gateway-request-hooks.md docs/subsystems/README.md docs/superpowers/specs/2026-11-20-prompt-translation-design.md
 git commit -m "docs: the reference for a request's texts translated for a model
 
 What the plugin decides and what the gateway does, and where each is.

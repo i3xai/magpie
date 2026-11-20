@@ -227,7 +227,8 @@ Every failure leaves the request as it was:
 | Model A is not a model magpie routes | Nothing is translated. |
 | Model A fails or is late | The texts are sent untranslated. |
 | The answer's count does not match | Every text of that call is left untranslated. |
-| The plugin's hook throws or is late | Nothing is translated. |
+| The plugin's hook throws or is late | That plugin gives no plan. Another plugin's plan is asked, and the request is translated if one gives a usable plan. |
+| The client asked for structured output | Nothing is translated. Its answer is JSON, and a translation of it is neither valid JSON nor the JSON the client asked for. |
 
 The failure is counted in the usage rows and logged, at the rate the gateway
 logs its other failures.
