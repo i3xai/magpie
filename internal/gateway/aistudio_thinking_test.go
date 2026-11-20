@@ -131,7 +131,7 @@ func TestChatThoughtTags(t *testing.T) {
 // the first of them the moment it comes.
 func TestChatThoughtTagsToAnthropic(t *testing.T) {
 	rec := httptest.NewRecorder()
-	enc := encoder("anthropic", newSSEWriter(rec), &Request{Model: "m"})
+	enc := encoder("anthropic", newSSEWriter(rec), &Request{Model: "m"}, nil)
 	var d chatDecoder
 	for _, c := range []string{
 		`{"id":"x","choices":[{"index":0,"delta":{"role":"assistant","content":"<thought>Greeting"}}]}`,

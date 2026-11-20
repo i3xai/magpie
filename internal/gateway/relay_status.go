@@ -15,7 +15,10 @@ import (
 // non-streaming text; once streaming output has begun a failure is a
 // terminal error event. It is for the backends that report their own
 // statuses; name is the backend's, for an answer that never came.
-func relayStatus(w http.ResponseWriter, from provider.Protocol, name string, req *Request, events <-chan Event, usage *Usage, abort context.CancelFunc) (int, string) {
+//
+// tr is the translator of the reply, nil when there is none: the reply's
+// texts are then told to the client as the backend wrote them.
+func relayStatus(w http.ResponseWriter, from provider.Protocol, name string, req *Request, tr *translator, events <-chan Event, usage *Usage, abort context.CancelFunc) (int, string) {
 	fail := func(ev Event) (int, string) {
 		abort()
 		code := ev.Status
@@ -40,7 +43,7 @@ func relayStatus(w http.ResponseWriter, from provider.Protocol, name string, req
 			return fail(Event{Text: name + " ended without an answer"})
 		}
 		sw := newSSEWriter(w)
-		enc := encoder(from, sw, req, usage)
+		enc := encoder(from, sw, req, tr, usage)
 		var failed string
 		see := func(ev Event) bool {
 			if ev.Kind == KStart || ev.Kind == KUsage {
@@ -74,6 +77,12 @@ func relayStatus(w http.ResponseWriter, from provider.Protocol, name string, req
 	}
 	res := col.finish()
 	usage.add(res.Usage)
+	// the reply's texts are translated before it is rendered, so a client
+	// that asked for no stream is given the same language a streaming client
+	// is (translate_reply.go)
+	if tr != nil && !req.wantsJSON() {
+		tr.translateResult(tr.ctx, &res)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	w.Write(renderUsage(from, res, req, usage))

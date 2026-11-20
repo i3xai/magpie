@@ -634,7 +634,7 @@ func TestClaudeBridgeSafeguardResults(t *testing.T) {
 				}
 				run.readOutput(strings.NewReader(strings.Join(lines, "\n")))
 				rec := httptest.NewRecorder()
-				enc := encoder(provider.Anthropic, newSSEWriter(rec), &Request{Model: "claude-sonnet-5"})
+				enc := encoder(provider.Anthropic, newSSEWriter(rec), &Request{Model: "claude-sonnet-5"}, nil)
 				var col collector
 				for e := range ch {
 					enc.event(e)

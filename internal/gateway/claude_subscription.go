@@ -8080,7 +8080,7 @@ func relayFailing(w http.ResponseWriter, r *http.Request, from provider.Protocol
 			begin()
 		}
 		sw := newSSEWriter(w)
-		enc := encoder(from, sw, req, usage)
+		enc := encoder(from, sw, req, nil, usage)
 		var failed, said, stop string
 		see := func(ev Event) {
 			switch ev.Kind {

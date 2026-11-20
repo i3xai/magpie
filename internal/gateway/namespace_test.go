@@ -91,7 +91,7 @@ func namespacedReq() *Request {
 
 func TestNamespacedCallStreamed(t *testing.T) {
 	rec := httptest.NewRecorder()
-	enc := encoder(provider.Responses, newSSEWriter(rec), namespacedReq())
+	enc := encoder(provider.Responses, newSSEWriter(rec), namespacedReq(), nil)
 	enc.event(Event{Kind: KToolStart, ID: "c1", Name: "collaboration__spawn_agent"})
 	enc.event(Event{Kind: KToolArgs, Text: `{"message":"x"}`})
 	enc.event(Event{Kind: KToolStart, ID: "c2", Name: "exec_command"})

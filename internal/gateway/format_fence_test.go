@@ -146,7 +146,7 @@ func TestStructuredOutputFenceAfterSystemFallback(t *testing.T) {
 			close(ch)
 			rec := httptest.NewRecorder()
 			var u Usage
-			code, failed := relayStatus(rec, provider.Responses, "fixture", req, ch, &u, func() {})
+			code, failed := relayStatus(rec, provider.Responses, "fixture", req, nil, ch, &u, func() {})
 			if code != 200 || failed != "" {
 				t.Fatalf("status %d: %s", code, failed)
 			}
@@ -170,7 +170,7 @@ func TestStructuredOutputFencePreservesIncompleteReplies(t *testing.T) {
 	for _, failed := range []bool{false, true} {
 		t.Run(map[bool]string{false: "length", true: "error"}[failed], func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			enc := encoder(provider.Responses, newSSEWriter(rec), &Request{Model: "m", Format: &Format{Type: "json_object"}})
+			enc := encoder(provider.Responses, newSSEWriter(rec), &Request{Model: "m", Format: &Format{Type: "json_object"}}, nil)
 			enc.event(Event{Kind: KText, Text: partial})
 			if failed {
 				enc.event(Event{Kind: KError, Text: "upstream interrupted", Code: "server_error"})
@@ -195,7 +195,7 @@ func TestStructuredOutputFencePreservesIncompleteReplies(t *testing.T) {
 
 func TestStructuredOutputUnfencedTextStreamsImmediately(t *testing.T) {
 	rec := httptest.NewRecorder()
-	enc := encoder(provider.Responses, newSSEWriter(rec), &Request{Model: "m", Format: &Format{Type: "json_object"}})
+	enc := encoder(provider.Responses, newSSEWriter(rec), &Request{Model: "m", Format: &Format{Type: "json_object"}}, nil)
 	enc.event(Event{Kind: KText, Text: `{"raw_memory":`})
 	if got := responsesText(t, rec.Body.String(), true); got != `{"raw_memory":` {
 		t.Fatalf("initial delta buffered: %q", got)

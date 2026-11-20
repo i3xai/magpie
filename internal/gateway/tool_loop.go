@@ -65,7 +65,7 @@ func (s *Server) stoppedToolLoop(w http.ResponseWriter, r *http.Request, from pr
 	}
 	why := loop.why()
 	s.answeredHere(r, from, body, toolLoopWho, why, func() {
-		writeLocalText(w, from, req, loop.notice(conversationLang(from, body)))
+		writeLocalText(w, from, req, loop.notice(conversationLang(from, body)), s.requestTranslator(r))
 	})
 	return true
 }
@@ -407,12 +407,14 @@ var toolLoopNotices = map[string]string{
 }
 
 // writeLocalText answers req with text in from's API, as a whole reply or
-// a stream as it asked: a finished assistant turn with no call in it.
-func writeLocalText(w http.ResponseWriter, from provider.Protocol, req *Request, text string) {
+// a stream as it asked: a finished assistant turn with no call in it. tr is
+// the translator of the reply, nil when there is none: the text is then told
+// to the client as it was written.
+func writeLocalText(w http.ResponseWriter, from provider.Protocol, req *Request, text string, tr *translator) {
 	events := make(chan Event, 4)
 	events <- Event{Kind: KStart, MsgID: fmt.Sprintf("msg_magpie_%d", time.Now().UnixNano()), Model: req.Model}
 	events <- Event{Kind: KText, Text: text}
 	events <- Event{Kind: KStop, Stop: "stop"}
 	close(events)
-	relayStatus(w, from, "magpie", req, events, &Usage{}, func() {})
+	relayStatus(w, from, "magpie", req, tr, events, &Usage{}, func() {})
 }

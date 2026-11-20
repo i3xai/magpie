@@ -73,7 +73,7 @@ func TestToolSearchTranslated(t *testing.T) {
 func TestToolSearchCallStreamedAndRendered(t *testing.T) {
 	req := &Request{Model: "m", Namespaced: map[string]nsTool{"tool_search": {Search: true}}}
 	rec := httptest.NewRecorder()
-	enc := encoder(provider.Responses, newSSEWriter(rec), req)
+	enc := encoder(provider.Responses, newSSEWriter(rec), req, nil)
 	enc.event(Event{Kind: KToolStart, ID: "s2", Name: "tool_search"})
 	enc.event(Event{Kind: KToolArgs, Text: `{"query":"calendar"}`})
 	enc.finish()

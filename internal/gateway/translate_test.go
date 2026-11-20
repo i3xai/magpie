@@ -407,3 +407,213 @@ func TestMagpiesOwnRequestIsNotTranslated(t *testing.T) {
 		t.Fatalf("the request was translated: %s", asked)
 	}
 }
+
+// recordedEncoder keeps the events it is given, in the order they came.
+type recordedEncoder struct {
+	events []Event
+}
+
+func (e *recordedEncoder) event(ev Event) { e.events = append(e.events, ev) }
+func (e *recordedEncoder) finish()        {}
+func (e *recordedEncoder) keepalive()     {}
+
+// A reply's text reaches the client in the language asked, and the events
+// that came after it keep their place.
+func TestTranslatedReplyKeepsItsOrder(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a15", "ka", []string{"m"}, m)
+	s := New()
+	tr := aTranslator(t, s, aPlan("a15/m"))
+	rec := &recordedEncoder{}
+	enc := &translateEncoder{streamEncoder: rec, tr: tr, ctx: tr.ctx}
+	enc.event(Event{Kind: KText, Text: "done"})
+	enc.event(Event{Kind: KToolStart, ID: "t1", Name: "read"})
+	enc.event(Event{Kind: KStop, Stop: "tool"})
+	enc.finish()
+	if len(rec.events) != 3 {
+		t.Fatalf("events: %+v", rec.events)
+	}
+	if rec.events[0].Kind != KText || rec.events[0].Text != "翻译" {
+		t.Fatalf("first event: %+v", rec.events[0])
+	}
+	if rec.events[1].Kind != KToolStart {
+		t.Fatalf("second event: %+v", rec.events[1])
+	}
+	if rec.events[2].Kind != KStop {
+		t.Fatalf("third event: %+v", rec.events[2])
+	}
+}
+
+// A reply's text that came after a call is translated too, and keeps its
+// place: the client reads the answer in the order the model gave it.
+func TestTranslatedReplyAfterACall(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a22", "ka", []string{"m"}, m)
+	s := New()
+	tr := aTranslator(t, s, aPlan("a22/m"))
+	rec := &recordedEncoder{}
+	enc := &translateEncoder{streamEncoder: rec, tr: tr, ctx: tr.ctx}
+	enc.event(Event{Kind: KText, Text: "first"})
+	enc.event(Event{Kind: KToolStart, ID: "t1", Name: "read"})
+	enc.event(Event{Kind: KText, Text: "second"})
+	enc.event(Event{Kind: KStop, Stop: "tool"})
+	enc.finish()
+	if len(rec.events) != 4 {
+		t.Fatalf("events: %+v", rec.events)
+	}
+	if rec.events[0].Kind != KText || rec.events[0].Text != "翻译" {
+		t.Fatalf("first event: %+v", rec.events[0])
+	}
+	if rec.events[1].Kind != KToolStart {
+		t.Fatalf("second event: %+v", rec.events[1])
+	}
+	if rec.events[2].Kind != KText || rec.events[2].Text != "翻译" {
+		t.Fatalf("third event: %+v", rec.events[2])
+	}
+	if rec.events[3].Kind != KStop {
+		t.Fatalf("fourth event: %+v", rec.events[3])
+	}
+}
+
+// A whole reply's text is translated before it is rendered, so a client
+// that asked for no stream is given the same language a streaming client is.
+func TestTranslatedWholeReply(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a16", "ka", []string{"m"}, m)
+	s := New()
+	tr := aTranslator(t, s, aPlan("a16/m"))
+	res := Result{Parts: []Part{{Kind: Text, Text: "done"}}}
+	tr.translateResult(context.Background(), &res)
+	if res.Parts[0].Text != "翻译" {
+		t.Fatalf("the reply: %+v", res.Parts[0])
+	}
+}
+
+// A reply the model gave in English reaches the client in Chinese, through
+// the whole gateway: the request's own side is Task 4's, and is already
+// there by now.
+func TestTranslatedReplyThroughTheGateway(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a17", "ka", []string{"m"}, m)
+	serveOn(t, "a18", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// the provider is asked a stream, as every request that goes
+		// through the gateway's translation is (translate.go), so the fake
+		// answers with one
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"done"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a18/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a17/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "翻译") {
+		t.Fatalf("the client was told: %s", rec.Body.String())
+	}
+}
+
+// A reply the client asked for as a stream reaches it in the language
+// asked as well: the text is held while it is translated, and let go with
+// the events that came after it.
+func TestTranslatedStreamThroughTheGateway(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a24", "ka", []string{"m"}, m)
+	serveOn(t, "a25", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// the provider is asked a stream, as every request that goes
+		// through the gateway's translation is (translate.go), so the fake
+		// answers with one
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"done"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a25/m","stream":true,"messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a24/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "翻译") {
+		t.Fatalf("the client was told: %s", rec.Body.String())
+	}
+}
+
+// The encoder a request with a plan gets translates the text it is given.
+func TestTranslatedEncoder(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a23", "ka", []string{"m"}, m)
+	s := New()
+	tr := aTranslator(t, s, aPlan("a23/m"))
+	rec := httptest.NewRecorder()
+	enc := encoder(provider.Responses, newSSEWriter(rec), &Request{Model: "m"}, tr)
+	enc.event(Event{Kind: KText, Text: "done"})
+	enc.finish()
+	if !strings.Contains(rec.Body.String(), "翻译") {
+		t.Fatalf("the client was told: %s", rec.Body.String())
+	}
+}
+
+// A client that asked for structured output is not translated: its answer
+// is JSON, and a translation of it is neither valid JSON nor the JSON the
+// client asked for.
+func TestStructuredOutputIsNotTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a19", "ka", []string{"m"}, m)
+	s := New()
+	tr := aTranslator(t, s, aPlan("a19/m"))
+	rec := httptest.NewRecorder()
+	enc := encoder(provider.Responses, newSSEWriter(rec), &Request{Model: "m", Format: &Format{Type: "json_object"}}, tr)
+	enc.event(Event{Kind: KText, Text: "done"})
+	enc.finish()
+	if !strings.Contains(rec.Body.String(), "done") {
+		t.Fatalf("the structured answer: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "翻译") {
+		t.Fatalf("the structured answer was translated: %s", rec.Body.String())
+	}
+}
+
+// A whole answer a client asked to be JSON is not translated either: the
+// JSON it asked for is what it gets.
+func TestStructuredWholeReplyIsNotTranslated(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a20", "ka", []string{"m"}, m)
+	serveOn(t, "a21", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// the provider is asked a stream, as every request that goes
+		// through the gateway's translation is (translate.go), so the fake
+		// answers with one
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"answer\": \"done\"}"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a21/m","response_format":{"type":"json_object"},"messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a20/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "done") {
+		t.Fatalf("the client was told: %s", rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "翻译") {
+		t.Fatalf("the client's JSON was translated: %s", rec.Body.String())
+	}
+}

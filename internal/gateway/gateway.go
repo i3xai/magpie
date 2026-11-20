@@ -9850,6 +9850,12 @@ func (s *Server) translate(w http.ResponseWriter, r *http.Request, p provider.Pr
 	res2 := col.finish()
 	u.add(res2.Usage)
 	u.add(Usage{Served: res2.Model})
+	// the reply's texts are translated before it is rendered, so a client
+	// that asked for no stream is given the same language a streaming client
+	// is (translate_reply.go)
+	if tr := s.requestTranslator(r); tr != nil && !request.wantsJSON() {
+		tr.translateResult(r.Context(), &res2)
+	}
 	out := renderUsage(from, res2, request, u)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
@@ -10275,7 +10281,7 @@ func relayEvents(events <-chan Event, sw *sseWriter, enc streamEncoder, see func
 	}
 }
 
-func encoder(proto provider.Protocol, w *sseWriter, r *Request, usage ...*Usage) streamEncoder {
+func encoder(proto provider.Protocol, w *sseWriter, r *Request, tr *translator, usage ...*Usage) streamEncoder {
 	enc := makeEncoder(proto, w, r)
 	if len(usage) > 0 && usage[0] != nil {
 		enc = &usageEncoder{streamEncoder: enc, usage: usage[0]}
@@ -10291,6 +10297,16 @@ func encoder(proto provider.Protocol, w *sseWriter, r *Request, usage ...*Usage)
 		// a fenced JSON answer reaches a structured-output client as the
 		// JSON it asked for (format_fence.go)
 		enc = &fenceEncoder{streamEncoder: enc}
+	}
+	if tr != nil && !r.wantsJSON() {
+		// a client that asked for structured output is not translated: its
+		// answer is JSON, and a translation of it is neither valid JSON nor
+		// the JSON the client asked for. A half-translated answer is worse
+		// than an untranslated one.
+		//
+		// the text the client is told is translated, and the events that
+		// followed it wait for the translation (translate_reply.go)
+		enc = &translateEncoder{streamEncoder: enc, tr: tr, ctx: tr.ctx}
 	}
 	return enc
 }

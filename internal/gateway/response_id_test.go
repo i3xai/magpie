@@ -65,7 +65,7 @@ func TestEncoderUsageKeepsActualClientResponseID(t *testing.T) {
 					u := Usage{RequestID: "request-header"}
 					rec := httptest.NewRecorder()
 					if stream {
-						enc := encoder(proto, newSSEWriter(rec), req, &u)
+						enc := encoder(proto, newSSEWriter(rec), req, nil, &u)
 						enc.event(Event{Kind: KStart, MsgID: upstreamID})
 						enc.event(Event{Kind: KText, Text: "answer"})
 						enc.event(Event{Kind: KUsage, Usage: Usage{Input: 10, Output: 2}})

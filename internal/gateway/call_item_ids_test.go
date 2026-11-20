@@ -18,7 +18,7 @@ import (
 func TestCustomToolCallHasCtcID(t *testing.T) {
 	req := &Request{Model: "m", Namespaced: map[string]nsTool{"apply_patch": {Custom: true, Name: "apply_patch"}}}
 	rec := httptest.NewRecorder()
-	enc := encoder(provider.Responses, newSSEWriter(rec), req)
+	enc := encoder(provider.Responses, newSSEWriter(rec), req, nil)
 	enc.event(Event{Kind: KToolStart, ID: "p1", Name: "apply_patch"})
 	enc.event(Event{Kind: KToolArgs, Text: `{"input":"*** Begin Patch"}`})
 	enc.finish()

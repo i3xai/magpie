@@ -37,7 +37,7 @@ func phases(body string) (streamed, ended []string) {
 
 func encoded(evs ...Event) string {
 	rec := httptest.NewRecorder()
-	enc := encoder(provider.Responses, newSSEWriter(rec), &Request{Model: "m"})
+	enc := encoder(provider.Responses, newSSEWriter(rec), &Request{Model: "m"}, nil)
 	for _, ev := range evs {
 		enc.event(ev)
 	}
