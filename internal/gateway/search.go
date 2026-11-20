@@ -1346,6 +1346,12 @@ func (s *Server) searchReply(w http.ResponseWriter, r *http.Request, from provid
 		defer close(events)
 		s.searchRounds(ctx, &q, tool.Name, first, ask, events)
 	}()
+	// the reply's texts are translated before they are rendered, so the
+	// client is given the language it asked for: the renderer that answers
+	// it reads the translator from the request's context (replyTranslator)
+	if tr := s.requestTranslator(r); tr != nil {
+		r = r.WithContext(withReplyTranslator(r.Context(), tr))
+	}
 	return relay(w, r, from, name, req, events, usage, cancel, nil, func(string, string, bool) {})
 }
 

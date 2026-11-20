@@ -7696,12 +7696,14 @@ func (s *Server) serveSubscriptionAs(w http.ResponseWriter, r *http.Request, fro
 		defer close(quit)
 		events = keepBridgeHeard(events, quit)
 	}
+	// the bridge answers a turn magpie runs itself: the reply's texts are
+	// told to the client as Claude Code wrote them
 	code, msg := relayFailing(w, r, from, name, req, events, usage, abort, begin, func(said, stop string, ok bool) {
 		if !gone() {
 			return // the client went first: letGo has the run
 		}
 		run.ended(req, said, stop, ok)
-	})
+	}, nil)
 	if req.interactive && thirdPartyIn(msg) {
 		s.subscription.refusedTUI(req)
 	}
@@ -8018,18 +8020,50 @@ func keepBridgeHeard(events <-chan Event, quit <-chan struct{}) <-chan Event {
 	return out
 }
 
+// replyTranslatorKey is the translator of a reply's texts on a request's
+// context: the renderer that answers the client is a plain function with no
+// server of its own to ask the plan's model with, so the caller that serves
+// the turn keeps the translator there (withReplyTranslator), as the plan
+// itself is kept (translate.go).
+type replyTranslatorKey struct{}
+
+// withReplyTranslator keeps tr on the request's context, so the renderer
+// that answers the client translates the reply with the request's own
+// translator.
+func withReplyTranslator(ctx context.Context, tr *translator) context.Context {
+	return context.WithValue(ctx, replyTranslatorKey{}, tr)
+}
+
+// replyTranslator is the translator a request's texts are translated with,
+// nil when there is none: the reply's texts are then told to the client as
+// the model wrote them.
+func replyTranslator(r *http.Request) *translator {
+	if r == nil {
+		return nil
+	}
+	tr, _ := r.Context().Value(replyTranslatorKey{}).(*translator)
+	return tr
+}
+
 // relay answers the client with a reply's events: abort is called when
 // there is no answer to give, ended when one was given, before its last
 // event goes out.
+//
+// The reply's texts are translated with the translator the request's
+// context carries (replyTranslator), nil when there is none: they are then
+// told to the client as the model wrote them.
 func relay(w http.ResponseWriter, r *http.Request, from provider.Protocol, name string, req *Request, events <-chan Event, usage *Usage,
 	abort, begin func(), ended func(said, stop string, ok bool)) (int, string) {
-	return relayFailing(w, r, from, name, req, events, usage, func(int, string) { abort() }, begin, ended)
+	return relayFailing(w, r, from, name, req, events, usage, func(int, string) { abort() }, begin, ended, replyTranslator(r))
 }
 
 // relayFailing is relay with abort told the status and words the client
 // is answered with (bridgeFailed).
+//
+// tr is the translator of the reply's texts, nil when there is none: the
+// Claude bridge answers a turn magpie runs itself and keeps none.
 func relayFailing(w http.ResponseWriter, r *http.Request, from provider.Protocol, name string, req *Request, events <-chan Event, usage *Usage,
-	abort func(code int, msg string), begin func(), ended func(said, stop string, ok bool)) (int, string) {
+	abort func(code int, msg string), begin func(), ended func(said, stop string, ok bool), tr *translator) (int, string) {
 	stream := req.Stream
 	if stream {
 		// an error before any of the answer — out of quota, rate limited —
@@ -8080,7 +8114,7 @@ func relayFailing(w http.ResponseWriter, r *http.Request, from provider.Protocol
 			begin()
 		}
 		sw := newSSEWriter(w)
-		enc := encoder(from, sw, req, nil, usage)
+		enc := encoder(from, sw, req, tr, usage)
 		var failed, said, stop string
 		see := func(ev Event) {
 			switch ev.Kind {
@@ -8169,6 +8203,12 @@ func relayFailing(w http.ResponseWriter, r *http.Request, from provider.Protocol
 	res := col.finish()
 	usage.add(res.Usage)
 	usage.add(Usage{Served: res.Model})
+	// the reply's texts are translated before it is rendered, so a client
+	// that asked for no stream is given the same language a streaming client
+	// is (translate_reply.go)
+	if tr != nil && !req.wantsJSON() {
+		tr.translateResult(tr.ctx, &res)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(200)
 	_, _ = w.Write(renderUsage(from, res, req, usage))
