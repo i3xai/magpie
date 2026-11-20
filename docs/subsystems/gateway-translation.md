@@ -37,7 +37,16 @@ hooks](gateway-request-hooks.md).
    that came after it wait for it, so the client reads the answer in the order
    the model gave it. A text that comes after a tool call is held and
    translated on its own. A whole reply's text parts are translated before it
-   is rendered.
+   is rendered. The renderers that answer the client, and the translator each
+   is given:
+
+   | The renderer | The reply | The translator |
+   | --- | --- | --- |
+   | `streamTranslated` in [`internal/gateway/continuation.go`](../../internal/gateway/continuation.go) | The agent's own streamed reply | The request's own |
+   | `relayStatus` in [`internal/gateway/relay_status.go`](../../internal/gateway/relay_status.go) | A backend that reports its own statuses, streamed or whole | The request's own, when there is one |
+   | `relay` in [`internal/gateway/claude_subscription.go`](../../internal/gateway/claude_subscription.go) | A reply magpie's own search or advisor answered, streamed or whole | The request's own, when the search answers the client; none for the Claude bridge, which answers a turn magpie runs itself |
+   | `translate` in [`internal/gateway/gateway.go`](../../internal/gateway/gateway.go) | A whole reply, collected into a `Result` and rendered | The request's own |
+
 6. The translation is asked of the model the plan names, through the gateway
    itself (`askChatCtx`), so it is counted in the usage rows under its own
    kind and cannot ask the plugins again.
@@ -81,6 +90,11 @@ hooks](gateway-request-hooks.md).
 
 ```sh
 go test -tags nogui ./internal/gateway -run 'TestTranslat' -count=1
+go test -tags nogui ./internal/gateway -run 'TestMagpiesOwnCall|TestTheTranslation|TestTheTranslatesUserAgent|TestTheCodexTitle|TestThePluginPlan' -count=1
+go test -tags nogui ./internal/gateway -run 'TestTheSearchsReply' -count=1
 go test -tags nogui ./internal/plugin -run 'TestGatewayHookTranslate' -count=1
 go test -tags nogui ./internal/settings -run TestTranslateTimeout -count=1
 ```
+
+The plugin's hooks need bun on `PATH`: `testenv.Bun` skips the hook tests
+otherwise, and a skipped test is not a passing one.

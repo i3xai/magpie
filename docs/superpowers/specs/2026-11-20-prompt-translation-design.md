@@ -83,6 +83,7 @@ where the encoder is built:
 | --- | --- |
 | `streamTranslated` in `internal/gateway/continuation.go` | The agent's own streamed reply. |
 | `relayStatus` in `internal/gateway/relay_status.go` | A backend that reports its own statuses, streamed or whole. |
+| `relay` in `internal/gateway/claude_subscription.go` | A reply magpie's own search or advisor answered, streamed or whole. |
 | `translate` in `internal/gateway/gateway.go` | A whole reply, collected into a `Result` and rendered. |
 
 A whole reply is not written by an encoder: it is collected into a `Result`
@@ -93,7 +94,10 @@ client got Chinese.
 
 The Claude bridge (`internal/gateway/claude_subscription.go`) renders a whole
 reply of its own, for a turn magpie runs itself. It is not translated: the
-plan is not on that path.
+bridge's own call of `relayFailing` passes no translator. The same function
+answers the search's and the advisor's reply — the one a request carrying a
+web search or an advisor is answered by — and that call passes the request's
+own translator.
 
 ## What the plugin gives the core
 
@@ -270,7 +274,11 @@ logs its other failures.
 | `internal/gateway/gateway.go` | `attempt` does not relay a request whose texts are translated; `translate` calls the request-side primitive and translates a whole reply's text before it is rendered. |
 | `internal/gateway/continuation.go` | `streamTranslated` wraps the encoder with the reply's translator. |
 | `internal/gateway/relay_status.go` | `relayStatus` wraps the encoder and translates a whole reply's text. |
-| `internal/gateway/middleware.go` | `gatewayHooks` keeps the plan the plugin gave. |
+| `internal/gateway/claude_subscription.go` | `relayFailing` takes the reply's translator; the Claude bridge passes none. |
+| `internal/gateway/search.go` | `searchReply` gives the renderer the request's own translator. |
+| `internal/gateway/middleware.go` | `gatewayHooks` keeps the plan the plugin gave; `ownAsk` takes it off the search, the vision stand-in's and the advisor's own calls. |
+| `internal/gateway/classify.go` | `askChatCtx` takes the plan off the router's own call and the translation's own call. |
+| `internal/gateway/codex_titles.go`, `internal/gateway/codex_backend.go` | The plan is taken off the titles, the predictions, the compaction's summary and Codex's own fallback. |
 | `internal/plugin/gateway.go`, `internal/plugin/host.js` | The `onTranslate` hook: asked in the request's round trip, bounded, and its failure counted. |
 | `internal/settings/settings.go` | `TranslateTimeout` and `TranslateWait`. |
 | `internal/usage` | The `translate` kind, so a translation is told apart from the turn's own call. |
