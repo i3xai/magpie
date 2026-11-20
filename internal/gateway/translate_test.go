@@ -15,6 +15,7 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/usage"
 )
 
 // translateModel is a model that answers with the texts it was given, in
@@ -622,5 +623,51 @@ func TestStructuredWholeReplyIsNotTranslated(t *testing.T) {
 func TestTranslationHasItsOwnKind(t *testing.T) {
 	if got := callKind(http.Header{"User-Agent": []string{TranslateAgent}}); got != "translate" {
 		t.Fatalf("kind: %q", got)
+	}
+}
+
+// A translation's own row in the ledger says it is a translation: the call
+// the plan's model is asked for the texts with is a call of its own, and
+// the tokens it spent are its own.
+func TestTranslationHasItsOwnRowInTheLedger(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a22", "ka", []string{"m"}, m)
+	serveOn(t, "a23", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"done"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a23/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a22/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	var rows []usage.Record
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		rows = rows[:0]
+		for _, u := range usage.Load(time.Time{}) {
+			if u.Kind == usage.KindTranslate {
+				rows = append(rows, u)
+			}
+		}
+		if len(rows) > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(rows) != 2 {
+		// two: one for the request's texts and one for the reply's
+		t.Fatalf("the translation's rows: %+v", rows)
+	}
+	for _, row := range rows {
+		if row.Provider != "a22" || row.Model != "m" {
+			t.Fatalf("the translation's row: %+v", row)
+		}
 	}
 }
