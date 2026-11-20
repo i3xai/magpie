@@ -148,10 +148,13 @@ The filter is on the part's kind, not on the message's role: in the
 Anthropic protocol a tool result is carried by a user message, so a filter
 that took a user message's whole text would take the tool's output with it.
 
-A text that holds no CJK is left as it is: a Han ideograph or a CJK
-punctuation mark is what counts. That covers a conversation that began before
-the feature was on, and a turn whose translation failed and was let through
-unchanged.
+A text the cache knows is translated from it, whatever its script: the cache
+holds the text it was made from, and that is known exactly, where a script is
+a guess. A text the cache does not know is left as it is when it is already
+in the language wanted: a text that holds no CJK is left as it is when
+English is wanted, and one that holds CJK when Chinese is. That covers a
+conversation that began before the feature was on, and a turn whose
+translation failed and was let through unchanged.
 
 ## Translations and the cache
 

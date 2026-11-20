@@ -411,8 +411,9 @@ import (
 	"github.com/yetone/magpie/internal/plugin"
 )
 
-// translateModel is a model that answers with the texts it was given, the
-// other way round, so a test can see what was asked of it.
+// translateModel is a model that answers with the texts it was given, in
+// the other script, so a test can see what was asked of it and what came
+// back.
 type translateModel struct {
 	mu    sync.Mutex
 	asked [][]string
@@ -436,7 +437,12 @@ func (m *translateModel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
 	m.asked = append(m.asked, texts)
 	m.mu.Unlock()
-	arr, _ := json.Marshal([]string{"translated"})
+	// the answer is in the other script, as a translation's is
+	answer := "translated"
+	if len(texts) > 0 && !holdsCJK(texts[0]) {
+		answer = "翻译"
+	}
+	arr, _ := json.Marshal([]string{answer})
 	content, _ := json.Marshal(string(arr))
 	w.Header().Set("Content-Type", "application/json")
 	_, _ = w.Write([]byte(`{"choices":[{"message":{"content":` + string(content) + `}}]}`))
@@ -450,10 +456,11 @@ func (m *translateModel) calls() int {
 }
 
 // aPlan is a plan a plugin would give: Chinese to English, with the model
-// "a/ta" as the model to ask.
-func aPlan() *plugin.TranslatePlan {
+// named as the model to ask. Each test names its own model, so the
+// translations one test made are not another's.
+func aPlan(model string) *plugin.TranslatePlan {
 	return &plugin.TranslatePlan{
-		Model: "a/ta", From: "zh", To: "en",
+		Model: model, From: "zh", To: "en",
 		FromName: "Chinese", ToName: "English",
 		FromScript: "cjk", ToScript: "latin",
 		System: "Translate {from} into {to}.",
@@ -478,9 +485,9 @@ func aTranslator(t *testing.T, s *Server, plan *plugin.TranslatePlan) *translato
 func TestTranslatorAsksTheModelsPlan(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a", "ka", []string{"ta"}, m)
+	serveOn(t, "a1", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan())
+	tr := aTranslator(t, s, aPlan("a1/m"))
 	out := tr.translate(context.Background(), []string{"你好"}, true)
 	if len(out) != 1 || out[0] != "translated" {
 		t.Fatalf("translated: %q", out)
@@ -498,9 +505,9 @@ func TestTranslatorAsksTheModelsPlan(t *testing.T) {
 func TestTranslatorLeavesTheLanguageWantedAlone(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a", "ka", []string{"ta"}, m)
+	serveOn(t, "a2", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan())
+	tr := aTranslator(t, s, aPlan("a2/m"))
 	out := tr.translate(context.Background(), []string{"hello"}, true)
 	if out[0] != "hello" {
 		t.Fatalf("translated: %q", out)
@@ -515,13 +522,13 @@ func TestTranslatorLeavesTheLanguageWantedAlone(t *testing.T) {
 func TestTranslatorKeepsBothEnds(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a", "ka", []string{"ta"}, m)
+	serveOn(t, "a3", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan())
+	tr := aTranslator(t, s, aPlan("a3/m"))
 	// the reply goes from English to Chinese
 	tr.translate(context.Background(), []string{"hello"}, false)
 	// and the Chinese it produced finds the English it was made from
-	out := tr.translate(context.Background(), []string{"translated"}, true)
+	out := tr.translate(context.Background(), []string{"翻译"}, true)
 	if out[0] != "hello" {
 		t.Fatalf("the reverse lookup gave: %q", out)
 	}
@@ -534,11 +541,11 @@ func TestTranslatorKeepsBothEnds(t *testing.T) {
 // it was: half a translation is worse than none.
 func TestTranslatorRefusesAWrongAnswer(t *testing.T) {
 	fresh(t)
-	serveOn(t, "a", "ka", []string{"ta"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serveOn(t, "a4", "ka", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"[\"one\"]"}}]}`))
 	}))
 	s := New()
-	tr := aTranslator(t, s, aPlan())
+	tr := aTranslator(t, s, aPlan("a4/m"))
 	out := tr.translate(context.Background(), []string{"你好", "世界"}, true)
 	if out[0] != "你好" || out[1] != "世界" {
 		t.Fatalf("translated: %q", out)
@@ -548,11 +555,11 @@ func TestTranslatorRefusesAWrongAnswer(t *testing.T) {
 // A model's failure leaves the texts as they were.
 func TestTranslatorKeepsTheTextsWhenTheModelFails(t *testing.T) {
 	fresh(t)
-	serveOn(t, "a", "ka", []string{"ta"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serveOn(t, "a5", "ka", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(500)
 	}))
 	s := New()
-	tr := aTranslator(t, s, aPlan())
+	tr := aTranslator(t, s, aPlan("a5/m"))
 	out := tr.translate(context.Background(), []string{"你好"}, true)
 	if out[0] != "你好" {
 		t.Fatalf("translated: %q", out)
@@ -681,11 +688,17 @@ func (e *translator) translate(ctx context.Context, texts []string, wantTo bool)
 	var ask []int
 	for i, t := range texts {
 		out[i] = t
-		if t == "" || !needsTranslation(t, script) {
+		if t == "" {
 			continue
 		}
+		// the cache first: a text it knows is a text that was translated
+		// before, and what it was made from is known exactly. The script
+		// below is a guess, and the cache is not.
 		if v, ok := pair.lookup(t, wantTo); ok {
 			out[i] = v
+			continue
+		}
+		if !needsTranslation(t, script) {
 			continue
 		}
 		ask = append(ask, i)
@@ -999,17 +1012,17 @@ Add to `internal/gateway/translate_test.go`, and add `"github.com/yetone/magpie/
 func TestTranslationThroughTheGateway(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a", "ka", []string{"ta"}, m)
+	serveOn(t, "a6", "ka", []string{"m"}, m)
 	var asked string
-	serveOn(t, "b", "kb", []string{"tb"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	serveOn(t, "b", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		asked = string(body)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"done"}}]}`))
 	}))
 	s := New()
-	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"b/tb","messages":[{"role":"user","content":"帮我写个函数"}]}`))
-	req = req.WithContext(withTranslatePlan(req.Context(), aPlan()))
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"b/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a6/m")))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != 200 {
@@ -1021,7 +1034,7 @@ func TestTranslationThroughTheGateway(t *testing.T) {
 	if strings.Contains(asked, "帮我写个函数") {
 		t.Fatalf("the provider was asked in Chinese: %s", asked)
 	}
-	if !strings.Contains(rec.Body.String(), "translated") {
+	if !strings.Contains(rec.Body.String(), "翻译") {
 		t.Fatalf("the client was told: %s", rec.Body.String())
 	}
 }
@@ -1031,12 +1044,12 @@ func TestTranslationThroughTheGateway(t *testing.T) {
 func TestMagpiesOwnRequestIsNotTranslated(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a", "ka", []string{"ta"}, m)
+	serveOn(t, "a7", "ka", []string{"m"}, m)
 	s := New()
 	r := httptest.NewRequest("POST", "http://magpie/v1/chat/completions", nil)
 	r.Header.Set("User-Agent", RouterAgent)
 	rec := httptest.NewRecorder()
-	s.serve(rec, r, provider.Chat, []byte(`{"model":"a/ta","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	s.serve(rec, r, provider.Chat, []byte(`{"model":"a7/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
 	if m.calls() != 0 {
 		t.Fatalf("a translation was made: %d", m.calls())
 	}
@@ -1151,9 +1164,9 @@ func (e *recordedEncoder) keepalive()      {}
 func TestTranslatedReplyKeepsItsOrder(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a", "ka", []string{"ta"}, m)
+	serveOn(t, "a8", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan())
+	tr := aTranslator(t, s, aPlan("a8/m"))
 	rec := &recordedEncoder{}
 	enc := &translateEncoder{streamEncoder: rec, tr: tr, ctx: tr.ctx}
 	enc.event(Event{Kind: KText, Text: "done"})
@@ -1163,7 +1176,7 @@ func TestTranslatedReplyKeepsItsOrder(t *testing.T) {
 	if len(rec.events) != 3 {
 		t.Fatalf("events: %+v", rec.events)
 	}
-	if rec.events[0].Kind != KText || rec.events[0].Text != "translated" {
+	if rec.events[0].Kind != KText || rec.events[0].Text != "翻译" {
 		t.Fatalf("first event: %+v", rec.events[0])
 	}
 	if rec.events[1].Kind != KToolStart {
@@ -1179,12 +1192,12 @@ func TestTranslatedReplyKeepsItsOrder(t *testing.T) {
 func TestTranslatedWholeReply(t *testing.T) {
 	fresh(t)
 	m := &translateModel{}
-	serveOn(t, "a", "ka", []string{"ta"}, m)
+	serveOn(t, "a9", "ka", []string{"m"}, m)
 	s := New()
-	tr := aTranslator(t, s, aPlan())
+	tr := aTranslator(t, s, aPlan("a9/m"))
 	res := Result{Parts: []Part{{Kind: Text, Text: "done"}}}
 	tr.translateResult(context.Background(), &res)
-	if res.Parts[0].Text != "translated" {
+	if res.Parts[0].Text != "翻译" {
 		t.Fatalf("the reply: %+v", res.Parts[0])
 	}
 }
