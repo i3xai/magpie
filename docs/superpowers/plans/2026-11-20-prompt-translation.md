@@ -1546,6 +1546,126 @@ User-Agent is not translated at all."
 
 ---
 
+### Task 4 — fix round 2: a client that asked for structured output is not translated at all
+
+**Files:**
+- Modify: `internal/gateway/gateway.go` (`translate`: the request's texts are not translated for a client that asked for JSON)
+- Test: `internal/gateway/translate_test.go`
+
+**Why this round:** the design's failure table says a client that asked for
+structured output is not translated — "Nothing is translated" — and the reply's
+side is guarded, in the encoder and in the whole reply's renderer. The
+request's side is not: `translate` translates the request's texts whatever the
+client asked for.
+
+So a client that asked for JSON gets a half-translation: its Chinese prompt
+goes to the model in English, the model answers in English, and the JSON comes
+back in English — untranslated, because a translation of it would be neither
+valid JSON nor the JSON the client asked for. The client asked in Chinese and
+is answered in English, which is the one thing the feature is for.
+
+Leaving the request alone keeps the client's language: the model answers the
+Chinese prompt in Chinese, and the JSON's values are in the language the
+client used. The design's own rule settles it — "Half a translation is worse
+than none" — and so does its wording.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `internal/gateway/translate_test.go`. This round takes a37 and a38.
+
+```go
+// A client that asked for structured output is not translated at all: its
+// prompt goes to the model as it came, and its answer comes back as the
+// model wrote it. A translation of the prompt alone would leave the client
+// answered in a language it did not ask in.
+func TestAStructuredClientIsNotTranslatedOnTheWayIn(t *testing.T) {
+	fresh(t)
+	m := &translateModel{}
+	serveOn(t, "a37", "ka", []string{"m"}, m)
+	var asked string
+	serveOn(t, "a38", "kb", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		asked = string(body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"{\"answer\": \"done\"}"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a38/m","response_format":{"type":"json_object"},"messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a37/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(asked, "帮我写个函数") {
+		t.Fatalf("the prompt was translated: %s", asked)
+	}
+	if m.calls() != 0 {
+		t.Fatalf("a translation was made: %d", m.calls())
+	}
+}
+```
+
+- [ ] **Step 2: Run the test to verify it fails**
+
+Run: `go test -tags nogui ./internal/gateway -run 'TestAStructuredClientIsNotTranslatedOnTheWayIn' -count=1`
+
+Expected: FAIL — the provider is asked with the translated text.
+
+- [ ] **Step 3: Guard the request's side too**
+
+In `internal/gateway/gateway.go`, in `translate`:
+
+```go
+	// the texts the plugin's translator wants in another language, before
+	// the body is built for the provider (translate.go). A client that asked
+	// for structured output is not translated at all: its answer is JSON, and
+	// a translation of it is neither valid JSON nor the JSON the client
+	// asked for, so a translated prompt alone would leave the client
+	// answered in a language it did not ask in.
+	if tr := s.requestTranslator(r); tr != nil && !request.wantsJSON() {
+		tr.translateRequestText(r.Context(), request)
+	}
+```
+
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `go test -tags nogui ./internal/gateway -run 'TestAStructuredClient|TestStructured|TestTranslat' -count=1`
+
+Expected: PASS.
+
+- [ ] **Step 5: Correct the reference**
+
+`docs/subsystems/gateway-translation.md` says "A client that asked for
+structured output is not translated: its answer is JSON…" — it now says
+neither side is translated, and why.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add internal/gateway/gateway.go internal/gateway/translate_test.go docs/subsystems/gateway-translation.md
+git commit -m "gateway: a client that asked for JSON is not translated at all
+
+The reply's side was guarded: a client's answer is JSON, and a translation of
+it is neither valid JSON nor the JSON the client asked for. The request's
+side was not, so a client that asked for JSON got a half-translation: its
+prompt went to the model in English, the model answered in English, and the
+JSON came back in English.
+
+Leaving the prompt alone keeps the client's language: the model answers the
+Chinese prompt in Chinese, and the JSON's values are in the language the
+client used. The design says a client that asked for structured output is not
+translated at all, and that half a translation is worse than none.
+
+Verified: go test -tags nogui ./internal/gateway -run
+'TestAStructuredClientIsNotTranslatedOnTheWayIn'. The test fails without the
+change: the prompt was translated."
+```
+
+---
+
 ### Task 5: The reply's text reaches the client in Chinese
 
 **Files:**
