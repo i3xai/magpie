@@ -617,3 +617,10 @@ func TestStructuredWholeReplyIsNotTranslated(t *testing.T) {
 		t.Fatalf("the client's JSON was translated: %s", rec.Body.String())
 	}
 }
+
+// A translation is told apart from the turn's own call in the ledger.
+func TestTranslationHasItsOwnKind(t *testing.T) {
+	if got := callKind(http.Header{"User-Agent": []string{TranslateAgent}}); got != "translate" {
+		t.Fatalf("kind: %q", got)
+	}
+}

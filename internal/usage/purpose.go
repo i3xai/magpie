@@ -37,6 +37,7 @@ var purposeKinds = func() map[string]PurposeKind {
 	add("MCP tool", KindMCP)                    // an MCP tool call (SourceMCP)
 	add("Cache keep-alive", KindKeepalive)      // a plugin's own ping (plugin_calls.go)
 	add("Advisor", KindAdvisor)                 // an advisor call its vendor ran (gateway's advisorRows)
+	add("Translation", KindTranslate)           // a translation magpie made (gateway's translate.go)
 	// Claude Code names neither of these requests, so the gateway tells them
 	// by their content: the *_inferred kinds. They share the purpose of the
 	// plain kind (a client's own marker, were one sent), and say in their
@@ -61,6 +62,10 @@ const (
 	KindAgentSummary = "agent_summary"
 	KindAutoMode     = "auto_mode_check"
 	InferredSuffix   = "_inferred"
+	// KindTranslate is the kind of a row of a translation magpie made: the
+	// texts of a request or a reply in another language (gateway's
+	// translate.go)
+	KindTranslate = "translate"
 )
 
 // PurposeKinds returns a copy of the catalog used to generate the UI's catalog.

@@ -2233,6 +2233,9 @@ func callKind(h http.Header) string {
 	if v == "" && h.Get("User-Agent") == RouterAgent {
 		v = "routing" // a group's classifier, asked before the turn (#1839)
 	}
+	if v == "" && h.Get("User-Agent") == TranslateAgent {
+		v = "translate" // a translation magpie made of a request's texts
+	}
 	if v == "" && h.Get("x-openai-codex-luna-reserve") != "" {
 		v = "luna_reserve"
 	}
