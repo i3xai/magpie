@@ -96,6 +96,36 @@ and request-hook I/O. Hooks run in
 plugin order. Failure keeps the last accepted request; diagnostics contain fixed
 outcome codes and byte counts rather than private content.
 
+## The translate plan
+
+A hook may export `onTranslate(ctx)` beside `onRequest` and `onResponse`. It
+is asked once per request, in the request's own round trip, and returns the
+plan the gateway translates with, or null for none:
+
+```js
+export async function onTranslate(ctx) {
+  return {
+    model: "gemini-3-flash",
+    from: "zh", to: "en",
+    fromName: "Chinese", toName: "English",
+    fromScript: "cjk", toScript: "latin",
+    system: "Translate the following {from} text into {to}. Output only the translation."
+  }
+}
+```
+
+It is given the same context as `onRequest`, and `model` is the model the
+request goes to, so a hook can decide per model whether it translates. The
+first hook that gives a plan the gateway can use wins; a hook that throws or
+is late gives no plan of its own and holds up none after it, so the next hook
+is asked.
+
+The gateway asks the model itself, in process, and does the translating, so
+the plan is a policy and not a call: a hook that called back into magpie
+would have its own request offered to `onTranslate` again. A plan that names
+no model, no language or no prompt is no plan. See [Prompt
+translation](gateway-translation.md).
+
 ## Completion notification
 
 `export async function onResponse(reply, ctx)` is optional. It observes the
