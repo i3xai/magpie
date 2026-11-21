@@ -229,6 +229,9 @@ through a `TranslateWait` method beside `ClassifyWait`:
 - 0 is the default, 30 seconds;
 - from 1 to the most it may be set to, which is 300 seconds.
 
+The wait is set in Settings > Models > Translation, and from the command line
+(`magpie settings set translateTimeout <seconds>`).
+
 A translation that is not answered in time leaves its texts untranslated and
 the turn goes on. The turn's own model is not held for it.
 

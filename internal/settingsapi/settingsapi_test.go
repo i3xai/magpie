@@ -283,6 +283,28 @@ func TestQuitNoAskKeptUnlessSent(t *testing.T) {
 	}
 }
 
+// How long a translation is given to answer is the Settings page's row, and
+// the page sends it. A save that doesn't send it keeps it, as the other
+// pages' saves do, and the page's own save writes it.
+func TestTranslateTimeoutKeptUnlessSent(t *testing.T) {
+	home(t)
+	if err := settings.Save(settings.Settings{TranslateTimeout: 60}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Apply([]byte(`{"theme":"dark"}`), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.Load().TranslateTimeout; got != 60 {
+		t.Errorf("a save that didn't send translateTimeout changed it to %d", got)
+	}
+	if _, _, err := Apply([]byte(`{"theme":"dark","translateTimeout":120}`), false); err != nil {
+		t.Fatal(err)
+	}
+	if got := settings.Load().TranslateTimeout; got != 120 {
+		t.Errorf("translateTimeout sent 120 is %d", got)
+	}
+}
+
 // What a reply's model name says is replyModel (ZoeCats on Discord). The
 // page sends it; a page from before it sends memberModel, which changes
 // it only when that page's switch was moved, so its save keeps a vendor

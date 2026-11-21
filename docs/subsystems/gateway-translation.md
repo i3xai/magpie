@@ -88,7 +88,9 @@ hooks](gateway-request-hooks.md).
   User-Agent of magpie's own translations is no longer a gate: a client that
   sends it is translated all the same, and the ledger tells a translation's
   row from the turn's own by it.
-- The wait is `TranslateTimeout`, 30 seconds by default and at most 300.
+- The wait is `TranslateTimeout`, 30 seconds by default and at most 300. It is
+  set in Settings › Models › Translation, and from the command line
+  (`magpie settings set translateTimeout <seconds>`).
 
 ## Verification
 

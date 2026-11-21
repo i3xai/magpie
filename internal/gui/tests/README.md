@@ -2417,6 +2417,16 @@ choice or leaving it unchosen (no `lightweight` posted), no left-border
 accent, and no such row on a browser's page (`web`). English and Chinese,
 Chromium and WebKit, with `/api/settings` faked:
 node --test internal/gui/tests/lightweight.test.cjs
+
+`translate-timeout-row.test.cjs` checks Settings › Models › Translation, the
+section a translation's wait has of its own: its head sits between the
+Replies and the Routing ones, the row says what the wait is (how long a
+model is given to translate a request's texts and a reply's texts back),
+offers the waits a model may need, shows the set one unless it is another,
+and the page sends the picked one with the rest of its choices. English,
+Simplified and Traditional Chinese, Japanese and German, Chromium and
+WebKit, with `/api/settings` faked:
+node --test internal/gui/tests/translate-timeout-row.test.cjs
 ```
 
 ## Mobile Web
