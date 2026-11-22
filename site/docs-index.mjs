@@ -8,8 +8,6 @@
 // stale (five times on main from 11-13 to 11-17).
 import { createHash } from "node:crypto";
 import { readFile, readdir, writeFile } from "node:fs/promises";
-import { build as llmsFull } from "./llms-full.mjs";
-import { build as searchIndex } from "./search-index.mjs";
 
 const pub = new URL("./public/", import.meta.url);
 export const SUMS = new URL("./docs-index.sums", import.meta.url);
@@ -30,10 +28,20 @@ export async function sums() {
   return lines.join("\n") + "\n";
 }
 
-export async function writeAll() {
+// The two builders are given to it and not imported: each of them writes
+// what it builds through this file, and importing the one that is running
+// the script waits for that script's own top-level await, which waits for
+// this. `node search-index.mjs` and `node llms-full.mjs` exited 13 with
+// "unsettled top-level await" and wrote nothing, so the command the docs
+// tell a writer to run did not build the index.
+export async function writeAll({ llmsFull, searchIndex }) {
   await writeFile(new URL("llms-full.txt", pub), await llmsFull());
   for (const [lang, json] of Object.entries(await searchIndex())) await writeFile(new URL(`search/${lang}.json`, pub), json);
   await writeFile(SUMS, await sums());
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) await writeAll();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  const { build: llmsFull } = await import("./llms-full.mjs");
+  const { build: searchIndex } = await import("./search-index.mjs");
+  await writeAll({ llmsFull, searchIndex });
+}

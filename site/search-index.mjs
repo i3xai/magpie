@@ -73,7 +73,11 @@ export async function build() {
   return out;
 }
 
-// run as a script, it writes every file built from the docs (docs-index.mjs)
+// run as a script, it writes every file built from the docs (docs-index.mjs).
+// This file's own build is given to it: importing this file back would
+// wait for the top-level await below, which waits for that import.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  await (await import("./docs-index.mjs")).writeAll();
+  const { writeAll } = await import("./docs-index.mjs");
+  const { build: llmsFull } = await import("./llms-full.mjs");
+  await writeAll({ llmsFull, searchIndex: build });
 }
