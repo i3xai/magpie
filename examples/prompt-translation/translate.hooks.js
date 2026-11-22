@@ -17,7 +17,11 @@ const defaults = {
   toName: "English",
   fromScript: "cjk",
   toScript: "latin",
-  system: "Translate the following {from} text into {to}. Keep code, identifiers, numbers and formatting as they are. Output only the translation.",
+  // The gateway reads the model's answer as a JSON array of the texts it
+  // was given, one string each. A model that answers with plain text is
+  // refused, and the translation is dropped without a word: the prompt
+  // asks for the array, or the translation is lost.
+  system: "Translate the following {from} text into {to}. Keep code, identifiers, numbers and formatting as they are. Answer with a JSON array of strings, one string per text you were given, and nothing else.",
 };
 
 export async function onTranslate(ctx) {

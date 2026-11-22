@@ -15,7 +15,7 @@
       "toName": "English",
       "fromScript": "cjk",
       "toScript": "latin",
-      "system": "Translate the following {from} text into {to}. Keep code, identifiers, numbers and formatting as they are. Output only the translation."
+      "system": "Translate the following {from} text into {to}. Keep code, identifiers, numbers and formatting as they are. Answer with a JSON array of strings, one string per text you were given, and nothing else."
     }
   }
 }

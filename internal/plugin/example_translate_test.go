@@ -53,6 +53,16 @@ func TestTheTranslationExampleGivesAPlan(t *testing.T) {
 	if !strings.Contains(p.System, "{from}") || !strings.Contains(p.System, "{to}") {
 		t.Fatalf("the prompt does not name the languages: %q", p.System)
 	}
+	// The prompt asks for the texts as a JSON array, because the gateway
+	// reads the model's answer as one: a model that answers with plain
+	// text — which it does with a long reply — is refused, and that half
+	// of the translation is dropped without a word. A prompt of the
+	// example's own that says only "output the translation" loses the
+	// reply's translation, and the client is left with the language the
+	// model answered in.
+	if !strings.Contains(p.System, "JSON array") {
+		t.Fatalf("the prompt does not ask for a JSON array, so a model that answers with plain text is refused: %q", p.System)
+	}
 }
 
 // The example is shipped whole: a manifest that points at a hooks file

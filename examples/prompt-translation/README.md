@@ -61,13 +61,19 @@ is written in the hook.
 | `toName` | The language as the prompt names it (`English`); it fills `{to}`. |
 | `fromScript` | How the first language is written: `cjk` for Han ideographs, `latin` for the Latin alphabet. |
 | `toScript` | How the second language is written. |
-| `system` | The prompt the texts go through. `{from}` and `{to}` are filled with the language names. |
+| `system` | The prompt the texts go through. `{from}` and `{to}` are filled with the language names. The model is given the texts as a JSON array and its answer is read as one, so the prompt has to ask for a JSON array of strings, one per text. A model that answers with plain text is refused, and that half of the translation is dropped without a word. |
 | `only` | A model name: only requests going to that model are translated. Empty, every model's is. |
 
 A text that is already in the language wanted is left as it is, told by the
 script: a prompt with no Han ideographs is not translated into English
 again. An empty `toScript` means the gateway does not know how that
 language is written, and every text is translated.
+
+A model is asked for the translations as a JSON array of the texts it was
+given, and its answer is read as one. A model that answers with plain text
+— which it does with a long reply — is refused, and the translation is
+dropped without a word: the prompt above asks for the array, and a user
+with a prompt of their own has to ask for it too.
 
 A plan that names no model, no language or no prompt is no plan: nothing is
 translated and the request goes as it came. So is a model that is not
