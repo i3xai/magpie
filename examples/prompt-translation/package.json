@@ -1,0 +1,21 @@
+{
+  "name": "magpie-prompt-translation",
+  "version": "0.1.0",
+  "description": "Translates a request's texts into English before the model sees them, and the model's reply back into the language it came in.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "magpie": {
+    "hooks": "./translate.hooks.js",
+    "options": {
+      "model": "gemini-3-flash",
+      "from": "zh",
+      "to": "en",
+      "fromName": "Chinese",
+      "toName": "English",
+      "fromScript": "cjk",
+      "toScript": "latin",
+      "system": "Translate the following {from} text into {to}. Keep code, identifiers, numbers and formatting as they are. Output only the translation."
+    }
+  }
+}

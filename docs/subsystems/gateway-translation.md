@@ -5,7 +5,9 @@ a model, and the model's reply translated back, both by a model the user
 names. The policy is a plugin's; the mechanism is the gateway's.
 
 The hook that gives the policy is described in [Asynchronous gateway request
-hooks](gateway-request-hooks.md).
+hooks](gateway-request-hooks.md). A package that does it is
+[examples/prompt-translation](../../examples/prompt-translation), with a
+readme of its own.
 
 ## Responsibilities and sources of truth
 
