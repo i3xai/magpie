@@ -175,10 +175,14 @@ translation failed and was let through unchanged.
 
 A translation is one call with all the texts that need it. The core sends
 them as a JSON array of strings and asks for a JSON array of the same length
-back; the answer is read as JSON, and a fence around it is stripped first. An
-answer that is not JSON, or whose count is not the count that was asked for,
-leaves every text of that call untranslated: half a translation would corrupt
-the conversation, and the whole batch is refused instead.
+back; the answer is read as JSON, and a fence around it is stripped first. A
+model that answers with plain text — which it does with a long reply — is
+read as the one text when one text was asked for, and an answer with the
+array in a sentence of its own is read as the array: a translation dropped
+without a word would leave the client the language the model answered in.
+More than one text asked for, and an answer that is no array of them, leaves
+every text of that call untranslated: half a translation would corrupt the
+conversation, and the whole batch is refused instead.
 
 The cache is what makes this affordable, and it is not an optimization:
 

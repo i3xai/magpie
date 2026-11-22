@@ -76,12 +76,18 @@ readme of its own.
   reasoning and the compaction items Codex needs.
 - A text that is already in the language wanted is left as it is, told by
   the script the plan named.
+- The model is asked for the texts as a JSON array and its answer is read as
+  one: an array of as many texts as were asked for is the translation. A model
+  that answers with plain text — which it does with a long reply — is read as
+  the one text when one text was asked for, and an answer with the array in a
+  sentence of its own is read as the array. More than one text asked for, and
+  an answer that is no array of them, is refused.
 - Both ends of a translation are kept, so a text a translation produced
   finds the text it was made from. A conversation's history therefore costs
   no call.
 - A failure leaves the request as it was: no plan, a model that is not
-  served, a model that fails or is late, or an answer whose count is not the
-  count asked for. Half a translation is worse than none.
+  served, a model that fails or is late, or an answer that is not the texts
+  asked for. Half a translation is worse than none.
 - A request magpie makes of itself is not translated: the plan rides on the
   agent's request's context, and it is taken off the context of every call
   magpie makes of itself — the search, the vision stand-in, the advisor, the

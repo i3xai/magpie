@@ -109,7 +109,7 @@ export async function onTranslate(ctx) {
     from: "zh", to: "en",
     fromName: "Chinese", toName: "English",
     fromScript: "cjk", toScript: "latin",
-    system: "Translate the following {from} text into {to}. Output only the translation."
+    system: "Translate the following {from} text into {to}. Answer with a JSON array of strings, one string per text you were given, and nothing else."
   }
 }
 ```
@@ -119,6 +119,13 @@ request goes to, so a hook can decide per model whether it translates. The
 first hook that gives a plan the gateway can use wins; a hook that throws or
 is late gives no plan of its own and holds up none after it, so the next hook
 is asked.
+
+The texts are asked of the model as a JSON array and its answer is read as
+one, so the prompt has to ask for a JSON array of the same length back. A
+model that answers with plain text is read as the one text when one text was
+asked for, and an answer with the array in a sentence of its own is read as
+the array; more than one text asked for and an answer that is no array of
+them is refused, and the texts are left as they were.
 
 The gateway asks the model itself, in process, and does the translating, so
 the plan is a policy and not a call: a hook that called back into magpie

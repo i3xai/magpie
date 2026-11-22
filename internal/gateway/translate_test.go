@@ -174,6 +174,52 @@ func TestTranslatorRefusesAWrongAnswer(t *testing.T) {
 	}
 }
 
+// A model that answers with plain text — which it does with a long reply —
+// is read as the one text when one was asked for: a translation dropped
+// without a word left the client the language the model answered in.
+func TestTranslatorReadsAPlainAnswerForOneText(t *testing.T) {
+	fresh(t)
+	serveOn(t, "a32", "ka", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Explain photosynthesis in one sentence."}}]}`))
+	}))
+	s := New()
+	tr := aTranslator(t, s, aPlan("a32/m"))
+	out := tr.translate(context.Background(), []string{"你好"}, true)
+	if len(out) != 1 || out[0] != "Explain photosynthesis in one sentence." {
+		t.Fatalf("translated: %q", out)
+	}
+}
+
+// A plain answer for more than one text is refused: an answer that is not
+// an array of them cannot be told apart.
+func TestTranslatorRefusesAPlainAnswerForMoreThanOneText(t *testing.T) {
+	fresh(t)
+	serveOn(t, "a33", "ka", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"one and two"}}]}`))
+	}))
+	s := New()
+	tr := aTranslator(t, s, aPlan("a33/m"))
+	out := tr.translate(context.Background(), []string{"你好", "世界"}, true)
+	if out[0] != "你好" || out[1] != "世界" {
+		t.Fatalf("translated: %q", out)
+	}
+}
+
+// A model that put the array in a sentence of its own is read: the texts are
+// in the array, and the sentence around them is the model's own talk.
+func TestTranslatorReadsAnArrayInASentence(t *testing.T) {
+	fresh(t)
+	serveOn(t, "a34", "ka", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Here you go: [\"translated\"]"}}]}`))
+	}))
+	s := New()
+	tr := aTranslator(t, s, aPlan("a34/m"))
+	out := tr.translate(context.Background(), []string{"你好"}, true)
+	if len(out) != 1 || out[0] != "translated" {
+		t.Fatalf("translated: %q", out)
+	}
+}
+
 // A model's failure leaves the texts as they were.
 func TestTranslatorKeepsTheTextsWhenTheModelFails(t *testing.T) {
 	fresh(t)
@@ -512,6 +558,34 @@ func TestTranslatedReplyThroughTheGateway(t *testing.T) {
 	s := New()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a18/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
 	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a17/m")))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "翻译") {
+		t.Fatalf("the client was told: %s", rec.Body.String())
+	}
+}
+
+// A reply the model gave in English reaches the client in Chinese even when
+// the translating model answered with plain text: a model does that with a
+// long reply, and the translation dropped without a word left the client the
+// language the model answered in.
+func TestTranslatedReplyOfAPlainAnswer(t *testing.T) {
+	fresh(t)
+	serveOn(t, "a35", "ka", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"翻译"}}]}`))
+	}))
+	serveOn(t, "a36", "kc", []string{"m"}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		io.WriteString(w, sse(`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"done"}}]}`,
+			`data: {"id":"c","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}`,
+			`data: [DONE]`))
+	}))
+	s := New()
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(`{"model":"a36/m","messages":[{"role":"user","content":"帮我写个函数"}]}`))
+	req = req.WithContext(withTranslatePlan(req.Context(), aPlan("a35/m")))
 	rec := httptest.NewRecorder()
 	s.Handler().ServeHTTP(rec, req)
 	if rec.Code != 200 {

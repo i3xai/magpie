@@ -192,8 +192,13 @@ func translateBody(plan *plugin.TranslatePlan, texts []string, wantTo bool) []by
 }
 
 // translateAnswer reads the model's answer: the texts it was asked to
-// translate, as a JSON array, in the order they were asked for. An answer
-// that is not JSON, or whose count is not the count asked for, is refused.
+// translate, as a JSON array, in the order they were asked for.
+//
+// A model that answers with plain text — which it does with a long reply —
+// is read as the one text when one was asked for: a translation dropped
+// without a word leaves the client the language the model answered in.
+// More than one text asked for is not read that way, for an answer that is
+// not an array of them cannot be told apart, and is refused.
 func translateAnswer(answer string, want int) ([]string, bool) {
 	s := strings.TrimSpace(answer)
 	if strings.HasPrefix(s, "```") {
@@ -205,6 +210,28 @@ func translateAnswer(answer string, want int) ([]string, bool) {
 		}
 		s = strings.TrimSpace(s)
 	}
+	if out, ok := translateArray(s, want); ok {
+		return out, true
+	}
+	// a model that put the array in a sentence of its own
+	if i := strings.Index(s, "["); i >= 0 {
+		if j := strings.LastIndex(s, "]"); j > i {
+			if out, ok := translateArray(strings.TrimSpace(s[i:j+1]), want); ok {
+				return out, true
+			}
+		}
+	}
+	// an answer that was meant to be an array and is not one is refused, as
+	// it was: only an answer that is no array at all is the text itself
+	if want != 1 || s == "" || strings.HasPrefix(s, "[") {
+		return nil, false
+	}
+	return []string{s}, true
+}
+
+// translateArray reads an answer as the texts it holds: a JSON array of
+// strings, as many as were asked for, none of them empty.
+func translateArray(s string, want int) ([]string, bool) {
 	var out []string
 	if json.Unmarshal([]byte(s), &out) != nil || len(out) != want {
 		return nil, false
