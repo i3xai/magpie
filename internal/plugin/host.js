@@ -320,6 +320,9 @@ let prefer = {}
 let chosen = {}
 const hooks = [] // {spec, hooks}
 const gatewayHooks = [] // {spec, options, onRequest}
+// gatewayHookNames are the hooks an asynchronous request-hook package may
+// export: the ones the host asks it for, and the ones it says of it.
+const gatewayHookNames = ["onRequest", "onResponse", "onSignIn", "onTranslate"]
 const loaded = [] // {spec, id, error}
 const loaders = new Map() // account → options the auth loader returned
 // infos are info's answers a request is given, by account: built once, not
@@ -1545,10 +1548,21 @@ async function loadPlugins(list) {
       continue
     }
     for (const x of r.got) hooks.push(x)
-    if (r.gateway) gatewayHooks.push({ spec: p.spec, options: p.options ?? {}, onRequest: r.gateway.onRequest,
+    let gatewayHooksOf
+    if (r.gateway) {
+      // the hooks the package exports, as the host found them: a package
+      // that only gives a translation plan has no onRequest, and saying it
+      // has one would name a hook it does not have
+      gatewayHooksOf = gatewayHookNames.filter((n) => typeof r.gateway[n] === "function")
+      gatewayHooks.push({ spec: p.spec, options: p.options ?? {}, onRequest: r.gateway.onRequest,
       onResponse: r.gateway.onResponse, onSignIn: r.gateway.onSignIn, onTranslate: r.gateway.onTranslate,
       state: { calls: 0, failures: 0, totalMillis: 0, lastOutcome: "idle", lastBytes: 0 } })
-    if (!isPi) loaded.push({ spec: p.spec })
+    }
+    if (!isPi) {
+      const entry = { spec: p.spec }
+      if (gatewayHooksOf?.length) entry.gatewayHooks = gatewayHooksOf
+      loaded.push(entry)
+    }
   }
   config = { provider: {}, ...structuredClone(userConfig) }
   ownConfig = new Map()

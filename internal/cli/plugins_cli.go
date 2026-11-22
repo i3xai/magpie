@@ -217,8 +217,12 @@ func listPlugins(ctx context.Context, asJSON bool) error {
 	}
 	loaded, lerr := plugin.Plugins(ctx)
 	errs := map[string]string{}
+	hooksOf := map[string][]string{}
 	for _, p := range loaded {
 		errs[p.Spec] = p.Error
+		if len(p.GatewayHooks) > 0 {
+			hooksOf[p.Spec] = p.GatewayHooks
+		}
 	}
 	clashes := plugin.Clashes(loaded)
 	ps, perr := plugin.Providers(ctx)
@@ -256,7 +260,15 @@ func listPlugins(ctx context.Context, asJSON bool) error {
 		}
 		fmt.Printf("%s  %s\n", what, state)
 		if plugin.Gateway(plugin.Target(e.Spec)) != "" {
-			fmt.Println("  " + muted.Render("async gateway hook") + "  onRequest")
+			// the hooks the package exports, as the host found them: a
+			// package that is off was not loaded, so its hooks are not
+			// known, and a package that gives only a translation plan has
+			// no onRequest to name
+			line := "  " + muted.Render("async gateway hook")
+			if names := hooksOf[e.Spec]; len(names) > 0 {
+				line += "  " + strings.Join(names, ", ")
+			}
+			fmt.Println(line)
 		}
 		// its calls are counted in the gateway's process, not this one
 		if m, ok := mws[e.Spec]; ok && !e.Off {

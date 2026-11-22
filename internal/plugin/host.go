@@ -623,6 +623,10 @@ type Loaded struct {
 	Tools []Tool `json:"tools,omitempty"`
 	// Searches are the web search APIs its search hook gives (search.go)
 	Searches []SearchDef `json:"searches,omitempty"`
+	// GatewayHooks are the hooks its request-hook file exports, as the host
+	// found them: a package that only gives a translation plan has no
+	// onRequest, and naming one it does not have would be a lie
+	GatewayHooks []string `json:"gatewayHooks,omitempty"`
 }
 
 // Clash is a provider id more than one plugin signs in to. The host runs
